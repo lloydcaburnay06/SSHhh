@@ -195,6 +195,9 @@ final class AccessGuard
         $secret = $_SESSION['pending_totp_secret'];
 
         $error = '';
+        $isAjax = (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest')
+            || (str_contains((string) ($_SERVER['HTTP_ACCEPT'] ?? ''), 'application/json'));
+
         if (strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET')) === 'POST' && isset($_POST['setup_code'])) {
             $submittedCsrf = (string) ($_POST['csrf_token'] ?? '');
             $submittedCode = preg_replace('/\s+/', '', (string) $_POST['setup_code']);
@@ -225,11 +228,23 @@ final class AccessGuard
                     self::issueRememberDevice($pdo);
                 }
 
+                if ($isAjax) {
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode(['ok' => true, 'redirect' => 'index.php']);
+                    exit;
+                }
+
                 header('Location: index.php');
                 exit;
             } else {
                 usleep(300_000);
                 $error = 'Incorrect verification code. Ensure your device clock is accurate and try again.';
+            }
+
+            if ($isAjax) {
+                header('Content-Type: application/json; charset=utf-8');
+                echo json_encode(['ok' => false, 'error' => $error]);
+                exit;
             }
         }
 
@@ -242,6 +257,9 @@ final class AccessGuard
     private static function handleLogin(PDO $pdo, Crypto $crypto, string $csrfToken, string $encryptedSecret): never
     {
         $error = '';
+        $isAjax = (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest')
+            || (str_contains((string) ($_SERVER['HTTP_ACCEPT'] ?? ''), 'application/json'));
+
         if (strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET')) === 'POST' && isset($_POST['login_code'])) {
             $submittedCsrf = (string) ($_POST['csrf_token'] ?? '');
             $submittedCode = preg_replace('/\s+/', '', (string) $_POST['login_code']);
@@ -272,12 +290,25 @@ final class AccessGuard
                     if (str_contains($redirect, 'logout=1') || empty($redirect)) {
                         $redirect = 'index.php';
                     }
+
+                    if ($isAjax) {
+                        header('Content-Type: application/json; charset=utf-8');
+                        echo json_encode(['ok' => true, 'redirect' => $redirect]);
+                        exit;
+                    }
+
                     header('Location: ' . $redirect);
                     exit;
                 } else {
                     usleep(350_000);
                     $error = 'Invalid verification code. Please check your Google Authenticator app.';
                 }
+            }
+
+            if ($isAjax) {
+                header('Content-Type: application/json; charset=utf-8');
+                echo json_encode(['ok' => false, 'error' => $error]);
+                exit;
             }
         }
 
@@ -303,7 +334,7 @@ final class AccessGuard
     <link rel="icon" type="image/svg+xml" href="assets/img/icon.svg">
     <link rel="icon" type="image/png" sizes="32x32" href="assets/img/favicon-32.png">
     <link rel="apple-touch-icon" sizes="180x180" href="assets/img/apple-touch-icon.png">
-    <link rel="stylesheet" href="assets/css/app.css?v=1.1.7">
+    <link rel="stylesheet" href="assets/css/app.css?v=1.1.9">
 </head>
 <body class="totp-auth-page">
     <div class="totp-auth-container">
@@ -324,11 +355,9 @@ final class AccessGuard
                 </p>
             </div>
 
-            <?php if ($error !== ''): ?>
-                <div class="ssh-test-banner show err" style="margin-bottom:16px; font-family:var(--font-sans);">
-                    <?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?>
-                </div>
-            <?php endif; ?>
+            <div id="authAlertBanner" class="ssh-test-banner show err" style="<?= $error !== '' ? '' : 'display:none;' ?> margin-bottom:16px; font-family:var(--font-sans);">
+                <?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?>
+            </div>
 
             <div class="totp-step-box">
                 <div class="totp-step-title">
@@ -407,6 +436,46 @@ final class AccessGuard
             e.target.value = val;
         });
     });
+
+    const setupForm = document.getElementById('setupTotpForm');
+    if (setupForm) {
+        setupForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const submitBtn = setupForm.querySelector('button[type="submit"]');
+            const alertBanner = document.getElementById('authAlertBanner');
+            const origText = submitBtn ? submitBtn.textContent : '';
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.textContent = 'Activating...';
+            }
+            if (alertBanner) alertBanner.style.display = 'none';
+
+            try {
+                const res = await fetch(window.location.href, {
+                    method: 'POST',
+                    headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                    body: new FormData(setupForm)
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    if (submitBtn) submitBtn.textContent = 'Activated! Opening...';
+                    window.location.replace(data.redirect || 'index.php');
+                    return;
+                }
+                if (alertBanner) {
+                    alertBanner.textContent = data.error || 'Verification failed.';
+                    alertBanner.style.display = 'block';
+                }
+            } catch {
+                setupForm.submit();
+                return;
+            }
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.textContent = origText;
+            }
+        });
+    }
     </script>
 </body>
 </html>
@@ -416,7 +485,7 @@ final class AccessGuard
 
     private static function renderLoginScreen(string $csrfToken, string $error): never
     {
-        http_response_code(401);
+        http_response_code(200);
         ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -433,7 +502,7 @@ final class AccessGuard
     <link rel="icon" type="image/svg+xml" href="assets/img/icon.svg">
     <link rel="icon" type="image/png" sizes="32x32" href="assets/img/favicon-32.png">
     <link rel="apple-touch-icon" sizes="180x180" href="assets/img/apple-touch-icon.png">
-    <link rel="stylesheet" href="assets/css/app.css?v=1.1.7">
+    <link rel="stylesheet" href="assets/css/app.css?v=1.1.9">
 </head>
 <body class="totp-auth-page">
     <div class="totp-auth-container" style="max-width:420px;">
@@ -453,11 +522,9 @@ final class AccessGuard
                 </p>
             </div>
 
-            <?php if ($error !== ''): ?>
-                <div class="ssh-test-banner show err" style="margin-bottom:16px; font-family:var(--font-sans);">
-                    <?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?>
-                </div>
-            <?php endif; ?>
+            <div id="authAlertBanner" class="ssh-test-banner show err" style="<?= $error !== '' ? '' : 'display:none;' ?> margin-bottom:16px; font-family:var(--font-sans);">
+                <?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?>
+            </div>
 
             <form method="post" autocomplete="off" class="totp-form" id="loginTotpForm">
                 <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') ?>">
@@ -500,6 +567,46 @@ final class AccessGuard
             e.target.value = val;
         });
     });
+
+    const loginForm = document.getElementById('loginTotpForm');
+    if (loginForm) {
+        loginForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const submitBtn = loginForm.querySelector('button[type="submit"]');
+            const alertBanner = document.getElementById('authAlertBanner');
+            const origText = submitBtn ? submitBtn.textContent : '';
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.textContent = 'Unlocking...';
+            }
+            if (alertBanner) alertBanner.style.display = 'none';
+
+            try {
+                const res = await fetch(window.location.href, {
+                    method: 'POST',
+                    headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                    body: new FormData(loginForm)
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    if (submitBtn) submitBtn.textContent = 'Unlocked! Opening...';
+                    window.location.replace(data.redirect || 'index.php');
+                    return;
+                }
+                if (alertBanner) {
+                    alertBanner.textContent = data.error || 'Invalid code. Please try again.';
+                    alertBanner.style.display = 'block';
+                }
+            } catch {
+                loginForm.submit();
+                return;
+            }
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.textContent = origText;
+            }
+        });
+    }
     </script>
 </body>
 </html>

@@ -899,6 +899,29 @@
         });
     }
 
+    // Ensure all internal in-scope link clicks remain inside standalone PWA window on iOS/Android
+    function initStandaloneNavigationTrap() {
+        const isStandalone = ('standalone' in navigator && navigator.standalone) ||
+                             window.matchMedia('(display-mode: standalone)').matches ||
+                             window.matchMedia('(display-mode: fullscreen)').matches;
+        if (!isStandalone) return;
+
+        document.addEventListener('click', (e) => {
+            const a = e.target.closest('a');
+            if (!a || !a.href || a.target === '_blank' || a.hasAttribute('download')) return;
+            try {
+                const destUrl = new URL(a.href, window.location.href);
+                if (destUrl.origin === window.location.origin) {
+                    const currentDir = window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/') + 1);
+                    if (destUrl.pathname.startsWith(currentDir)) {
+                        e.preventDefault();
+                        window.location.href = destUrl.href;
+                    }
+                }
+            } catch {}
+        });
+    }
+
     window.DeployerApp = {
         escapeHtml,
         ansiToHtml,
@@ -915,6 +938,7 @@
     document.addEventListener('DOMContentLoaded', () => {
         initProjectModal();
         initPwa();
+        initStandaloneNavigationTrap();
     });
 })();
 
