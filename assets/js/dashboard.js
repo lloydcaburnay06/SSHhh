@@ -127,6 +127,10 @@
                             <button type="button" class="btn btn-danger btn-sm" data-action="delete" data-id="${p.id}">Delete</button>
                         </div>
                         <div class="card-actions-right">
+                            <button type="button" class="btn btn-deploy btn-sm" data-action="run" data-id="${p.id}" title="Quick run all enabled deployment commands for this project">
+                                <span>&#9654;</span>
+                                <span>Run</span>
+                            </button>
                             <a href="project.php?id=${p.id}" class="btn btn-primary btn-sm">Manage &amp; Deploy &rarr;</a>
                         </div>
                     </div>
@@ -443,7 +447,43 @@
             if (!project) return;
 
             const action = btn.dataset.action;
-            if (action === 'edit') {
+            if (action === 'run') {
+                if ((project.enabled_command_count || 0) === 0) {
+                    App.toast(`No enabled commands found in "${project.name}". Click "Manage & Deploy" to configure commands first.`, 'warning');
+                    return;
+                }
+
+                btn.disabled = true;
+                const origHtml = btn.innerHTML;
+                btn.innerHTML = '<span>&#9203;</span><span>Running...</span>';
+
+                const cardEl = btn.closest('.project-card');
+                const statusBadgeEl = cardEl ? cardEl.querySelector('.status-pill') : null;
+                if (statusBadgeEl) {
+                    statusBadgeEl.outerHTML = App.statusBadgeHtml('running');
+                }
+
+                App.toast(`Running deployment pipeline for "${project.name}"...`, 'info', 3000);
+
+                try {
+                    const finalPacket = await App.streamExecute({
+                        project_id: id,
+                        mode: 'deploy_all'
+                    });
+
+                    if (finalPacket && finalPacket.status === 'success') {
+                        App.toast(`Deployment succeeded for "${project.name}" (${App.formatDuration(finalPacket.duration_ms)})`, 'success');
+                    } else if (finalPacket && finalPacket.status === 'failed') {
+                        App.toast(`Deployment failed for "${project.name}" (exit ${finalPacket.exit_code ?? 'non-zero'})`, 'error');
+                    } else {
+                        App.toast(`Deployment finished for "${project.name}".`, 'info');
+                    }
+                } catch (err) {
+                    App.toast(`Deployment failed for "${project.name}": ` + err.message, 'error');
+                } finally {
+                    await refreshAll();
+                }
+            } else if (action === 'edit') {
                 App.openProjectModal(project, async () => refreshAll(), false);
             } else if (action === 'duplicate') {
                 App.openDuplicateModal(project, async (savedProject, wasSaved) => {

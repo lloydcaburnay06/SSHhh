@@ -119,7 +119,7 @@ final class AccessGuard
     <title>Remote Access Restricted — SSHhh</title>
     <link rel="icon" type="image/svg+xml" href="assets/img/icon.svg">
     <link rel="apple-touch-icon" sizes="180x180" href="assets/img/apple-touch-icon.png">
-    <link rel="stylesheet" href="assets/css/app.css?v=1.1.5">
+    <link rel="stylesheet" href="assets/css/app.css?v=1.1.6">
 </head>
 <body style="display:flex; align-items:center; justify-content:center; min-height:100dvh; padding:20px;">
     <div class="panel" style="max-width:480px; width:100%; padding:28px;">
@@ -158,7 +158,7 @@ final class AccessGuard
     <link rel="manifest" href="manifest.webmanifest">
     <link rel="icon" type="image/svg+xml" href="assets/img/icon.svg">
     <link rel="apple-touch-icon" sizes="180x180" href="assets/img/apple-touch-icon.png">
-    <link rel="stylesheet" href="assets/css/app.css?v=1.1.5">
+    <link rel="stylesheet" href="assets/css/app.css?v=1.1.6">
 </head>
 <body style="display:flex; align-items:center; justify-content:center; min-height:100dvh; padding:20px;">
     <div class="panel" style="max-width:420px; width:100%; padding:28px;">
