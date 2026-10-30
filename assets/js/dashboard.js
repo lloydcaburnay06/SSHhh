@@ -135,7 +135,7 @@
         try {
             const [projData, evData] = await Promise.all([
                 App.apiGet('list_projects'),
-                App.apiGet('list_events', { limit: 15 })
+                App.apiGet('list_events', { limit: 30 })
             ]);
             projects = projData.projects || [];
             updateStats(projData.stats);

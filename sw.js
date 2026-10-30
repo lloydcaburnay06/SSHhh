@@ -1,11 +1,11 @@
-const CACHE_NAME = 'sshhh-pwa-v1.1.1';
+const CACHE_NAME = 'sshhh-pwa-v1.1.2';
 const PRECACHE_ASSETS = [
     './offline.html',
     './manifest.webmanifest',
-    './assets/css/app.css?v=1.1.1',
-    './assets/js/common.js?v=1.1.1',
-    './assets/js/dashboard.js?v=1.1.1',
-    './assets/js/project.js?v=1.1.1',
+    './assets/css/app.css?v=1.1.2',
+    './assets/js/common.js?v=1.1.2',
+    './assets/js/dashboard.js?v=1.1.2',
+    './assets/js/project.js?v=1.1.2',
     './assets/img/icon.svg',
     './assets/img/logo.svg',
     './assets/img/icon-192.png',

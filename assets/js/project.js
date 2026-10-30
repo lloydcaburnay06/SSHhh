@@ -82,7 +82,7 @@
         const listEl = document.getElementById('commandsList');
         if (commands.length === 0) {
             listEl.innerHTML = `
-                <div style="text-align:center; padding:26px 16px; border:1px dashed var(--border-strong); border-radius:10px; color:var(--text-secondary);">
+                <div class="commands-empty-card">
                     <strong style="color:var(--text-primary); display:block; margin-bottom:6px;">No deployment commands configured yet</strong>
                     Click <strong>+ Add Command</strong> or select one of the quick preset chips below to build your deployment pipeline.
                 </div>
@@ -94,9 +94,9 @@
             const stepState = activeStepStates[idx] || '';
             const stateClass = stepState ? (stepState + '-step') : '';
             const disabledClass = !cmd.is_enabled ? 'disabled-step' : '';
-            const linesCount = Math.max(1, Math.min(8, String(cmd.command || '').split('\n').length));
+            const linesCount = Math.max(2, Math.min(7, String(cmd.command || '').split('\n').length));
 
-            let lastRunHtml = '';
+            let lastRunHtml = `<span class="step-ready-hint">${cmd.is_enabled ? 'Ready' : 'Skipped in Deploy All'}</span>`;
             if (cmd.last_exit_code !== null && cmd.last_exit_code !== undefined) {
                 const ok = Number(cmd.last_exit_code) === 0;
                 const dur = cmd.last_duration_ms !== null ? ' • ' + App.formatDuration(cmd.last_duration_ms) : '';
@@ -104,7 +104,7 @@
             }
 
             return `
-                <div class="command-step ${disabledClass} ${stateClass}" data-step-index="${idx}">
+                <article class="command-step ${disabledClass} ${stateClass}" data-step-index="${idx}">
                     <div class="step-top-row">
                         <span class="step-num">#${idx + 1}</span>
                         <input
@@ -116,8 +116,8 @@
                             placeholder="Step label (e.g. Pull latest code)"
                         >
                         <div class="step-order-btns">
-                            <button type="button" class="icon-btn" data-cmd-action="up" data-index="${idx}" title="Move Up" ${idx === 0 || isExecuting ? 'disabled' : ''}>&uarr;</button>
-                            <button type="button" class="icon-btn" data-cmd-action="down" data-index="${idx}" title="Move Down" ${idx === commands.length - 1 || isExecuting ? 'disabled' : ''}>&darr;</button>
+                            <button type="button" class="icon-btn" data-cmd-action="up" data-index="${idx}" title="Move Earlier" ${idx === 0 || isExecuting ? 'disabled' : ''}>&larr;</button>
+                            <button type="button" class="icon-btn" data-cmd-action="down" data-index="${idx}" title="Move Later" ${idx === commands.length - 1 || isExecuting ? 'disabled' : ''}>&rarr;</button>
                             <button type="button" class="icon-btn danger" data-cmd-action="delete" data-index="${idx}" title="Remove Step" ${isExecuting ? 'disabled' : ''}>&times;</button>
                         </div>
                     </div>
@@ -129,11 +129,11 @@
                         placeholder="Enter SSH command (e.g. git pull origin main)"
                         spellcheck="false"
                     >${App.escapeHtml(cmd.command)}</textarea>
-                    <div class="step-bottom-row">
+                    <div class="step-card-footer">
                         <div class="step-toggles">
                             <label class="toggle-label" title="Include this command when clicking Deploy Now (Execute All)">
                                 <input type="checkbox" data-field="is_enabled" data-index="${idx}" ${cmd.is_enabled ? 'checked' : ''}>
-                                <span>Include in Deploy All</span>
+                                <span>Deploy All</span>
                             </label>
                             <label class="toggle-label" title="Stop deployment pipeline if this command exits with a non-zero error code">
                                 <input type="checkbox" data-field="stop_on_error" data-index="${idx}" ${cmd.stop_on_error ? 'checked' : ''}>
@@ -147,7 +147,7 @@
                             </button>
                         </div>
                     </div>
-                </div>
+                </article>
             `;
         }).join('');
     }
@@ -267,7 +267,7 @@
         setExecutionLock(true, App.statusBadgeHtml('running'));
         startTimer();
 
-        if (window.innerWidth <= 1080) {
+        if (window.innerWidth <= 1180) {
             const termPanel = document.getElementById('liveTerminalPanel');
             if (termPanel) {
                 termPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -482,7 +482,13 @@
                 setDirty(true);
                 if (field === 'is_enabled') {
                     const card = target.closest('.command-step');
-                    if (card) card.classList.toggle('disabled-step', !target.checked);
+                    if (card) {
+                        card.classList.toggle('disabled-step', !target.checked);
+                        const hint = card.querySelector('.step-ready-hint');
+                        if (hint) {
+                            hint.textContent = target.checked ? 'Ready' : 'Skipped in Deploy All';
+                        }
+                    }
                 }
             }
         });

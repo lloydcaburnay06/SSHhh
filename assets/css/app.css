@@ -63,9 +63,10 @@ a {
 }
 
 .topbar-inner {
-    max-width: 1380px;
-    margin: 0 auto;
-    padding: 0 max(20px, env(safe-area-inset-right, 20px)) 0 max(20px, env(safe-area-inset-left, 20px));
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 0 max(24px, env(safe-area-inset-right, 24px)) 0 max(24px, env(safe-area-inset-left, 24px));
     min-height: 64px;
     display: flex;
     align-items: center;
@@ -161,11 +162,41 @@ a {
     display: none;
 }
 
-/* Main Container */
+/* Main Container — Full Width Desktop */
 .container {
-    max-width: 1380px;
-    margin: 0 auto;
-    padding: 24px max(20px, env(safe-area-inset-right, 20px)) calc(64px + env(safe-area-inset-bottom, 0px)) max(20px, env(safe-area-inset-left, 20px));
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 22px max(24px, env(safe-area-inset-right, 24px)) calc(56px + env(safe-area-inset-bottom, 0px)) max(24px, env(safe-area-inset-left, 24px));
+}
+
+/* Dashboard Two-Column Desktop Split (Projects Left, Global Event Log Right) */
+.dashboard-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(390px, 31%);
+    gap: 22px;
+    align-items: start;
+}
+
+.dashboard-main {
+    min-width: 0;
+}
+
+.dashboard-aside {
+    position: sticky;
+    top: 82px;
+    min-width: 0;
+}
+
+.global-events-panel {
+    max-height: calc(100vh - 104px);
+    display: flex;
+    flex-direction: column;
+}
+
+.global-events-scroll {
+    overflow-y: auto;
+    flex: 1;
 }
 
 /* Stats Strip */
@@ -465,7 +496,7 @@ a {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));
     gap: 18px;
-    margin-bottom: 36px;
+    margin-bottom: 0;
 }
 
 .project-card {
@@ -572,7 +603,7 @@ a {
     border-radius: var(--radius-lg);
     padding: 48px 24px;
     text-align: center;
-    margin-bottom: 32px;
+    margin-bottom: 0;
 }
 
 .empty-state h3 {
@@ -609,7 +640,7 @@ a {
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
     padding: 20px 24px;
-    margin-bottom: 22px;
+    margin-bottom: 0;
     display: flex;
     flex-wrap: wrap;
     align-items: center;
@@ -662,13 +693,37 @@ a {
     gap: 10px;
 }
 
-/* Workspace Split Grid on Project Page */
-.workspace-grid {
+/* Individual Project Management Full-Width Two-Column Layout */
+.project-layout {
     display: grid;
-    grid-template-columns: 1.15fr 0.85fr;
-    gap: 20px;
+    grid-template-columns: minmax(0, 1fr) minmax(420px, 35%);
+    grid-template-rows: auto 1fr;
+    gap: 22px;
     align-items: start;
-    margin-bottom: 26px;
+}
+
+.project-primary-stack {
+    grid-column: 1;
+    grid-row: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    min-width: 0;
+}
+
+.project-events-panel {
+    grid-column: 1;
+    grid-row: 2;
+    min-width: 0;
+}
+
+.project-console-aside {
+    grid-column: 2;
+    grid-row: 1 / 3;
+    position: sticky;
+    top: 82px;
+    height: calc(100vh - 104px);
+    min-width: 0;
 }
 
 /* Panels */
@@ -732,19 +787,34 @@ a {
     color: #34d399;
 }
 
-/* Command Pipeline Steps */
-.commands-list {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
+/* Command Pipeline Steps — Card / Grid View */
+.commands-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+    gap: 14px;
+    align-items: stretch;
+}
+
+.commands-empty-card {
+    grid-column: 1 / -1;
+    text-align: center;
+    padding: 28px 18px;
+    border: 1px dashed var(--border-strong);
+    border-radius: 10px;
+    color: var(--text-secondary);
 }
 
 .command-step {
-    background: var(--bg-input);
+    background: linear-gradient(180deg, #101728 0%, #0b111e 100%);
     border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    padding: 13px 14px;
+    border-radius: 12px;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
     transition: border-color 0.15s ease, opacity 0.15s ease;
+    min-width: 0;
 }
 
 .command-step:focus-within {
@@ -843,6 +913,7 @@ a {
 
 .step-cmd-editor {
     width: 100%;
+    flex: 1;
     background: #070b14;
     color: #e2e8f0;
     border: 1px solid var(--border-subtle);
@@ -852,7 +923,7 @@ a {
     font-size: 12.5px;
     line-height: 1.5;
     resize: vertical;
-    min-height: 42px;
+    min-height: 76px;
     outline: none;
 }
 
@@ -860,13 +931,13 @@ a {
     border-color: var(--border-focus);
 }
 
-.step-bottom-row {
+.step-card-footer {
     display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    margin-top: 9px;
+    flex-direction: column;
+    gap: 9px;
+    margin-top: 11px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
     font-size: 12px;
 }
 
@@ -896,8 +967,18 @@ a {
 .step-actions {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 8px;
-    margin-left: auto;
+    width: 100%;
+}
+
+.step-ready-hint {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .last-exit-tag {
@@ -981,10 +1062,11 @@ a {
     border-color: var(--border-focus);
 }
 
-/* Live Terminal Console */
+/* Live Terminal Console (Full-Height Right Dock on Desktop) */
 .terminal-panel {
-    position: sticky;
-    top: 80px;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
 }
 
 .terminal-header {
@@ -996,6 +1078,7 @@ a {
     justify-content: space-between;
     gap: 10px;
     flex-wrap: wrap;
+    flex-shrink: 0;
 }
 
 .terminal-dots {
@@ -1022,8 +1105,8 @@ a {
     font-size: 12.2px;
     line-height: 1.58;
     padding: 16px;
-    min-height: 410px;
-    max-height: 580px;
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
     white-space: pre-wrap;
     word-break: break-word;
@@ -1521,16 +1604,36 @@ a {
    Responsive & Mobile PWA Breakpoints
    ========================================================================== */
 
-@media (max-width: 1080px) {
-    .workspace-grid {
+@media (max-width: 1180px) {
+    .dashboard-layout {
         grid-template-columns: 1fr;
     }
 
-    .terminal-panel {
+    .dashboard-aside {
         position: static;
     }
 
+    .global-events-panel {
+        max-height: none;
+    }
+
+    .project-layout {
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+    }
+
+    .project-console-aside {
+        position: static;
+        height: auto;
+    }
+
+    .terminal-panel {
+        height: auto;
+    }
+
     .terminal-output {
+        flex: none;
         min-height: 280px;
         max-height: 440px;
     }
