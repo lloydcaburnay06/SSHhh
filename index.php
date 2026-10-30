@@ -9,6 +9,7 @@ $app = Bootstrap::init();
 
 $pageTitle = 'Projects Dashboard';
 $csrfToken = $app->csrfToken();
+$appTagline = (string) ($app->config()['app_tagline'] ?? 'Deployments so quiet, you can hear a server drop.');
 $initialProjects = $app->projects()->listAll();
 $initialStats = $app->projects()->getDashboardStats();
 $recentEvents = $app->logger()->query(null, ['limit' => 15]);
@@ -17,6 +18,10 @@ require __DIR__ . '/src/Views/header.php';
 ?>
 
 <main class="container">
+    <div class="mobile-tagline-strip">
+        <?= htmlspecialchars($appTagline, ENT_QUOTES, 'UTF-8') ?>
+    </div>
+
     <section class="stats-grid">
         <div class="stat-card">
             <span class="stat-label">Managed Projects</span>
@@ -46,8 +51,8 @@ require __DIR__ . '/src/Views/header.php';
                 <button type="button" class="filter-pill" data-env="development">Development</button>
             </div>
         </div>
-        <div>
-            <button type="button" class="btn btn-primary btn-lg" id="addProjectBtn">
+        <div class="toolbar-right">
+            <button type="button" class="btn btn-primary btn-lg toolbar-add-btn" id="addProjectBtn">
                 <span>+</span>
                 <span>Add Project</span>
             </button>
@@ -77,8 +82,7 @@ require __DIR__ . '/src/Views/header.php';
         'events'   => $recentEvents['items'],
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
 </script>
-<script src="assets/js/common.js?v=1.0.0"></script>
-<script src="assets/js/dashboard.js?v=1.0.0"></script>
+<script src="assets/js/common.js?v=1.1.0"></script>
+<script src="assets/js/dashboard.js?v=1.1.0"></script>
 </body>
 </html>
-

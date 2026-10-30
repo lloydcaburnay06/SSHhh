@@ -47,7 +47,7 @@
 
     function renderHero() {
         if (!project) return;
-        document.title = project.name + ' — SSH Deployer';
+        document.title = project.name + ' — ' + (window.DEPLOYER_APP_NAME || 'SSHhh');
         document.getElementById('breadcrumbProjectName').textContent = project.name;
         document.getElementById('heroProjectName').textContent = project.name;
 
@@ -266,6 +266,13 @@
         setConsoleText('');
         setExecutionLock(true, App.statusBadgeHtml('running'));
         startTimer();
+
+        if (window.innerWidth <= 1080) {
+            const termPanel = document.getElementById('liveTerminalPanel');
+            if (termPanel) {
+                termPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+        }
 
         const needsSync = (mode !== 'adhoc_command') && (isDirty || commands.some((c) => !c.id));
         const payload = {

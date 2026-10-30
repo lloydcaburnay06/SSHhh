@@ -93,18 +93,18 @@ require __DIR__ . '/src/Views/header.php';
         </div>
 
         <!-- Right Column: Live SSH Terminal Console -->
-        <div class="panel terminal-panel">
+        <div class="panel terminal-panel" id="liveTerminalPanel">
             <div class="terminal-header">
-                <div style="display:flex; align-items:center; gap:10px;">
+                <div style="display:flex; align-items:center; gap:10px; min-width:0;">
                     <div class="terminal-dots">
                         <span class="t-dot red"></span>
                         <span class="t-dot yellow"></span>
                         <span class="t-dot green"></span>
                     </div>
-                    <strong style="font-size:13px;">Live SSH Console</strong>
+                    <strong style="font-size:13px; white-space:nowrap;">Live SSH Console</strong>
                     <span id="consoleStateBadge"></span>
                 </div>
-                <div style="display:flex; align-items:center; gap:8px;">
+                <div style="display:flex; align-items:center; gap:8px; flex-shrink:0;">
                     <span id="consoleTimer" style="font-family:var(--font-mono); font-size:12px; color:var(--text-secondary);"></span>
                     <button type="button" class="btn btn-ghost btn-sm" id="copyConsoleBtn">Copy</button>
                     <button type="button" class="btn btn-ghost btn-sm" id="clearConsoleBtn">Clear</button>
@@ -116,25 +116,27 @@ require __DIR__ . '/src/Views/header.php';
 
     <!-- Bottom Full-Width Section: Complete Event Log -->
     <section class="panel">
-        <div class="panel-header">
+        <div class="panel-header event-log-header">
             <div>
                 <h2 class="panel-title">Complete Event Log</h2>
                 <span class="panel-subtitle">Full audit &amp; execution history: deployments, individual commands, SSH tests, and settings updates</span>
             </div>
-            <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-                <select class="form-select" id="eventStatusFilter" style="padding:5px 10px; font-size:12px;">
+            <div class="event-filter-controls">
+                <select class="form-select" id="eventStatusFilter">
                     <option value="all">All Statuses</option>
                     <option value="success">Succeeded</option>
                     <option value="failed">Failed</option>
                     <option value="warning">Warning</option>
                     <option value="info">Info / Audit</option>
                 </select>
-                <input type="search" class="search-input" id="eventSearchInput" placeholder="Search logs, commands, output..." style="min-width:220px; padding:5px 10px; font-size:12px;">
-                <button type="button" class="btn btn-ghost btn-sm" id="refreshEventsBtn">Refresh</button>
-                <button type="button" class="btn btn-danger btn-sm" id="clearEventsBtn">Clear Logs</button>
+                <input type="search" class="search-input event-search-input" id="eventSearchInput" placeholder="Search logs, commands, output...">
+                <div class="event-filter-btns">
+                    <button type="button" class="btn btn-ghost btn-sm" id="refreshEventsBtn">Refresh</button>
+                    <button type="button" class="btn btn-danger btn-sm" id="clearEventsBtn">Clear Logs</button>
+                </div>
             </div>
         </div>
-        <div style="padding: 12px 20px; border-bottom: 1px solid var(--border-subtle); background: rgba(0,0,0,0.15);">
+        <div class="event-tabs-bar">
             <div class="event-tabs" id="eventCategoryTabs">
                 <button type="button" class="event-tab active" data-cat="all">All Events <span class="tab-count" id="cnt-all">0</span></button>
                 <button type="button" class="event-tab" data-cat="deployment">Deployments <span class="tab-count" id="cnt-deployment">0</span></button>
@@ -156,8 +158,8 @@ require __DIR__ . '/src/Views/header.php';
         'events'   => $eventsData,
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
 </script>
-<script src="assets/js/common.js?v=1.0.0"></script>
-<script src="assets/js/project.js?v=1.0.0"></script>
+<script src="assets/js/common.js?v=1.1.0"></script>
+<script src="assets/js/project.js?v=1.1.0"></script>
 </body>
 </html>
 

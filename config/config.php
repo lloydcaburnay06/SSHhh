@@ -5,8 +5,9 @@ declare(strict_types=1);
 use Deployer\Env;
 
 $baseConfig = [
-    'app_name' => Env::get('DEPLOYER_APP_NAME', 'SSH Deployer'),
-    'timezone' => Env::get('DEPLOYER_TIMEZONE', 'UTC'),
+    'app_name'    => Env::get('DEPLOYER_APP_NAME', 'SSHhh'),
+    'app_tagline' => Env::get('DEPLOYER_APP_TAGLINE', 'Deployments so quiet, you can hear a server drop.'),
+    'timezone'    => Env::get('DEPLOYER_TIMEZONE', 'UTC'),
     'db' => [
         'host'     => Env::get('DEPLOYER_DB_HOST', '127.0.0.1'),
         'port'     => (int) Env::get('DEPLOYER_DB_PORT', '3306'),

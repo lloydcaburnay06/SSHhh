@@ -454,6 +454,48 @@
         };
     }
 
+    // PWA Service Worker Registration & Install Prompt Controller
+    function initPwa() {
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(() => {
+                    // Service workers require localhost or HTTPS; silently ignore if unsupported
+                });
+            });
+        }
+
+        let deferredInstallPrompt = null;
+        const installBtn = document.getElementById('pwaInstallBtn');
+
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredInstallPrompt = e;
+            if (installBtn) {
+                installBtn.style.display = 'inline-flex';
+            }
+        });
+
+        if (installBtn) {
+            installBtn.addEventListener('click', async () => {
+                if (!deferredInstallPrompt) return;
+                deferredInstallPrompt.prompt();
+                const choice = await deferredInstallPrompt.userChoice.catch(() => null);
+                if (choice && choice.outcome === 'accepted') {
+                    installBtn.style.display = 'none';
+                }
+                deferredInstallPrompt = null;
+            });
+        }
+
+        window.addEventListener('appinstalled', () => {
+            deferredInstallPrompt = null;
+            if (installBtn) {
+                installBtn.style.display = 'none';
+            }
+            toast('SSHhh installed! Launch it anytime from your home screen.', 'success');
+        });
+    }
+
     window.DeployerApp = {
         escapeHtml,
         ansiToHtml,
@@ -467,6 +509,9 @@
         renderEventItemHtml
     };
 
-    document.addEventListener('DOMContentLoaded', initProjectModal);
+    document.addEventListener('DOMContentLoaded', () => {
+        initProjectModal();
+        initPwa();
+    });
 })();
 

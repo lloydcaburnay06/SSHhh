@@ -1,9 +1,19 @@
 # Protect sensitive files and directories
 Options -Indexes
 
+<IfModule mod_mime.c>
+    AddType application/manifest+json .webmanifest
+</IfModule>
+
 <FilesMatch "^(\.|composer\.(json|lock)|README\.md|SECURITY\.md|LICENSE)">
     Require all denied
 </FilesMatch>
+
+<Files "sw.js">
+    <IfModule mod_headers.c>
+        Header set Cache-Control "no-cache, no-store, must-revalidate"
+    </IfModule>
+</Files>
 
 <IfModule mod_rewrite.c>
     RewriteEngine On

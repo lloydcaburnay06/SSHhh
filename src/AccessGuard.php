@@ -114,22 +114,28 @@ final class AccessGuard
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Remote Access Restricted — SSH Deployer</title>
-    <link rel="stylesheet" href="assets/css/app.css?v=1.0.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#090d16">
+    <title>Remote Access Restricted — SSHhh</title>
+    <link rel="icon" type="image/svg+xml" href="assets/img/icon.svg">
+    <link rel="apple-touch-icon" sizes="180x180" href="assets/img/apple-touch-icon.png">
+    <link rel="stylesheet" href="assets/css/app.css?v=1.1.0">
 </head>
-<body style="display:flex; align-items:center; justify-content:center; min-height:100vh; padding:20px;">
+<body style="display:flex; align-items:center; justify-content:center; min-height:100dvh; padding:20px;">
     <div class="panel" style="max-width:480px; width:100%; padding:28px;">
         <div class="brand" style="margin-bottom:16px;">
-            <span class="brand-icon">&gt;_</span>
-            <span>SSH Deployer</span>
+            <img src="assets/img/icon-192.png" alt="SSHhh" class="brand-logo-img" width="40" height="40">
+            <div class="brand-text-wrap">
+                <span class="brand-wordmark">SSH<span class="brand-hush">hh</span></span>
+                <span class="brand-tagline" style="display:block;">Deployments so quiet, you can hear a server drop.</span>
+            </div>
         </div>
         <h2 style="margin:0 0 10px 0; font-size:18px;">Localhost-Only Mode Active</h2>
         <p style="color:var(--text-secondary); margin:0 0 14px 0;">
             For your security, unauthenticated access is restricted to <code>127.0.0.1</code> / <code>::1</code>.
         </p>
         <p style="color:var(--text-secondary); margin:0; font-size:13px;">
-            To access SSH Deployer from another machine, set <code>DEPLOYER_APP_PASSWORD</code> (or <code>DEPLOYER_APP_PASSWORD_HASH</code>) in your <code>.env</code> file.
+            To access SSHhh from another device or mobile phone on your network, set <code>DEPLOYER_APP_PASSWORD</code> (or <code>DEPLOYER_APP_PASSWORD_HASH</code>) in your <code>.env</code> file.
         </p>
     </div>
 </body>
@@ -146,17 +152,24 @@ final class AccessGuard
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sign In — SSH Deployer</title>
-    <link rel="stylesheet" href="assets/css/app.css?v=1.0.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#090d16">
+    <title>Sign In — SSHhh</title>
+    <link rel="manifest" href="manifest.webmanifest">
+    <link rel="icon" type="image/svg+xml" href="assets/img/icon.svg">
+    <link rel="apple-touch-icon" sizes="180x180" href="assets/img/apple-touch-icon.png">
+    <link rel="stylesheet" href="assets/css/app.css?v=1.1.0">
 </head>
-<body style="display:flex; align-items:center; justify-content:center; min-height:100vh; padding:20px;">
-    <div class="panel" style="max-width:410px; width:100%; padding:28px;">
+<body style="display:flex; align-items:center; justify-content:center; min-height:100dvh; padding:20px;">
+    <div class="panel" style="max-width:420px; width:100%; padding:28px;">
         <div class="brand" style="margin-bottom:18px;">
-            <span class="brand-icon">&gt;_</span>
-            <span>SSH Deployer</span>
+            <img src="assets/img/icon-192.png" alt="SSHhh" class="brand-logo-img" width="42" height="42">
+            <div class="brand-text-wrap">
+                <span class="brand-wordmark">SSH<span class="brand-hush">hh</span></span>
+                <span class="brand-tagline" style="display:block;">Deployments so quiet, you can hear a server drop.</span>
+            </div>
         </div>
-        <h2 style="margin:0 0 6px 0; font-size:18px;">Unlock Deployer Vault</h2>
+        <h2 style="margin:0 0 6px 0; font-size:18px;">Unlock Vault</h2>
         <p style="color:var(--text-secondary); margin:0 0 18px 0; font-size:13px;">
             Enter your configured application password to manage projects and execute SSH deployments.
         </p>
@@ -180,4 +193,3 @@ final class AccessGuard
         exit;
     }
 }
-

@@ -111,7 +111,8 @@ try {
 
                 $lines = [
                     '====================================================================',
-                    'SSH DEPLOYER EVENT LOG #' . $event['id'],
+                    'SSHhh EVENT LOG #' . $event['id'],
+                    'Deployments so quiet, you can hear a server drop.',
                     '====================================================================',
                     'Project    : ' . ($event['project_name'] ?: 'N/A'),
                     'Category   : ' . strtoupper((string) $event['category']) . ' (' . $event['event_type'] . ')',
@@ -129,7 +130,7 @@ try {
                 ];
 
                 header('Content-Type: text/plain; charset=utf-8');
-                header(sprintf('Content-Disposition: attachment; filename="deployer-event-%d.log"', $event['id']));
+                header(sprintf('Content-Disposition: attachment; filename="sshhh-event-%d.log"', $event['id']));
                 echo implode("\n", $lines);
                 exit;
 

@@ -1,12 +1,14 @@
 {
-    "name": "ssh-deployer/ssh-deployer",
-    "description": "Self-hosted PHP SSH Project Deployer with AES-256-GCM credential encryption, 1-click live streaming pipelines, and complete event logging.",
+    "name": "sshhh/sshhh",
+    "description": "SSHhh — Deployments so quiet, you can hear a server drop. Self-hosted PWA SSH Deployer with AES-256-GCM credential vault, 1-click live streaming pipelines, and complete event logging.",
     "type": "project",
     "license": "MIT",
     "keywords": [
+        "sshhh",
         "ssh",
         "deployer",
         "deployment",
+        "pwa",
         "ci-cd",
         "devops",
         "phpseclib",
