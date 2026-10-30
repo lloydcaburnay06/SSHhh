@@ -1,0 +1,26 @@
+# Composer dependencies (installed via `composer install`)
+/vendor/
+
+# Local secrets & runtime state — NEVER commit secret.key
+/storage/*
+!/storage/.htaccess
+!/storage/.gitkeep
+
+# Local environment & configuration overrides
+.env
+.env.*
+!.env.example
+/config/config.local.php
+
+# Logs & temporary files
+*.log
+*.tmp
+
+# OS & Editor artifacts
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+*.swp
+

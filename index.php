@@ -1,0 +1,84 @@
+<?php
+
+declare(strict_types=1);
+
+use Deployer\Bootstrap;
+
+require_once __DIR__ . '/vendor/autoload.php';
+$app = Bootstrap::init();
+
+$pageTitle = 'Projects Dashboard';
+$csrfToken = $app->csrfToken();
+$initialProjects = $app->projects()->listAll();
+$initialStats = $app->projects()->getDashboardStats();
+$recentEvents = $app->logger()->query(null, ['limit' => 15]);
+
+require __DIR__ . '/src/Views/header.php';
+?>
+
+<main class="container">
+    <section class="stats-grid">
+        <div class="stat-card">
+            <span class="stat-label">Managed Projects</span>
+            <span class="stat-value indigo" id="statTotalProjects"><?= (int) $initialStats['total_projects'] ?></span>
+        </div>
+        <div class="stat-card">
+            <span class="stat-label">Total Deployments</span>
+            <span class="stat-value" id="statTotalDeploys"><?= (int) $initialStats['total_deployments'] ?></span>
+        </div>
+        <div class="stat-card">
+            <span class="stat-label">Successful Runs</span>
+            <span class="stat-value emerald" id="statSuccessDeploys"><?= (int) $initialStats['successful_deployments'] ?></span>
+        </div>
+        <div class="stat-card">
+            <span class="stat-label">Failed Runs</span>
+            <span class="stat-value rose" id="statFailedDeploys"><?= (int) $initialStats['failed_deployments'] ?></span>
+        </div>
+    </section>
+
+    <section class="toolbar">
+        <div class="toolbar-left">
+            <input type="search" class="search-input" id="projectSearchInput" placeholder="Search projects, SSH hosts, paths...">
+            <div class="filter-pills" id="envFilterPills">
+                <button type="button" class="filter-pill active" data-env="all">All</button>
+                <button type="button" class="filter-pill" data-env="production">Production</button>
+                <button type="button" class="filter-pill" data-env="staging">Staging</button>
+                <button type="button" class="filter-pill" data-env="development">Development</button>
+            </div>
+        </div>
+        <div>
+            <button type="button" class="btn btn-primary btn-lg" id="addProjectBtn">
+                <span>+</span>
+                <span>Add Project</span>
+            </button>
+        </div>
+    </section>
+
+    <section id="projectsContainer"></section>
+
+    <section class="panel">
+        <div class="panel-header">
+            <div class="panel-title-group">
+                <h2 class="panel-title">Recent Global Event Log</h2>
+                <span class="panel-subtitle">Latest deployments, SSH checks, and configuration updates across all projects</span>
+            </div>
+            <button type="button" class="btn btn-ghost btn-sm" id="refreshGlobalEventsBtn">Refresh</button>
+        </div>
+        <div class="events-list" id="globalEventsList"></div>
+    </section>
+</main>
+
+<?php require __DIR__ . '/src/Views/project_modal.php'; ?>
+
+<script>
+    window.INITIAL_DASHBOARD_DATA = <?= json_encode([
+        'projects' => $initialProjects,
+        'stats'    => $initialStats,
+        'events'   => $recentEvents['items'],
+    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
+</script>
+<script src="assets/js/common.js?v=1.0.0"></script>
+<script src="assets/js/dashboard.js?v=1.0.0"></script>
+</body>
+</html>
+
