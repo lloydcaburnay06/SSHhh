@@ -179,6 +179,17 @@ try {
                 'stats' => $app->projects()->getDashboardStats(),
             ]);
 
+        case 'reorder_projects':
+            $orderedIds = $body['ordered_ids'] ?? null;
+            if (!is_array($orderedIds)) {
+                throw new InvalidArgumentException('ordered_ids array is required.');
+            }
+            $projects = $app->projects()->reorder($orderedIds);
+            respondJson([
+                'ok'       => true,
+                'projects' => $projects,
+            ]);
+
         case 'save_commands':
             $projectId = (int) ($body['project_id'] ?? 0);
             $commandsInput = $body['commands'] ?? null;

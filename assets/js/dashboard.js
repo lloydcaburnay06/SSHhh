@@ -51,6 +51,8 @@
             return;
         }
 
+        const rankById = new Map(projects.map((item, index) => [Number(item.id), index + 1]));
+
         const cardsHtml = filtered.map((p) => {
             const authLabel = p.ssh_auth_type === 'key'
                 ? (p.has_private_key ? '&#128273; SSH Key Encrypted' : '&#9888; Missing Key')
@@ -60,14 +62,26 @@
                 ? `${App.escapeHtml(p.last_deployed_at)}${p.last_deploy_duration_ms ? ' (' + App.escapeHtml(App.formatDuration(p.last_deploy_duration_ms)) + ')' : ''}`
                 : 'No deployments run yet';
 
+            const priorityRank = rankById.get(Number(p.id)) || 1;
+
             return `
                 <article class="project-card" data-project-id="${p.id}">
                     <div class="project-card-header">
-                        <div>
-                            <h3 class="project-card-title">
-                                <a href="project.php?id=${p.id}">${App.escapeHtml(p.name)}</a>
-                            </h3>
-                            ${p.description ? `<p class="project-card-desc">${App.escapeHtml(p.description)}</p>` : ''}
+                        <div class="project-card-heading-left">
+                            <div class="project-drag-grip" title="Drag to arrange project priority" aria-label="Drag to arrange project priority">
+                                <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor" aria-hidden="true">
+                                    <circle cx="2.5" cy="2.5" r="1.3"/><circle cx="7.5" cy="2.5" r="1.3"/>
+                                    <circle cx="2.5" cy="7" r="1.3"/><circle cx="7.5" cy="7" r="1.3"/>
+                                    <circle cx="2.5" cy="11.5" r="1.3"/><circle cx="7.5" cy="11.5" r="1.3"/>
+                                </svg>
+                                <span class="priority-rank" data-priority-rank>#${priorityRank}</span>
+                            </div>
+                            <div style="min-width:0;">
+                                <h3 class="project-card-title">
+                                    <a href="project.php?id=${p.id}">${App.escapeHtml(p.name)}</a>
+                                </h3>
+                                ${p.description ? `<p class="project-card-desc">${App.escapeHtml(p.description)}</p>` : ''}
+                            </div>
                         </div>
                         <span class="badge env-${App.escapeHtml(p.environment)}">${App.escapeHtml(p.environment)}</span>
                     </div>
@@ -159,12 +173,251 @@
         }, false);
     }
 
+    function initProjectDragReorder() {
+        const container = document.getElementById('projectsContainer');
+        const scrollPane = document.querySelector('.dashboard-main');
+        if (!container) return;
+
+        let draggedCard = null;
+        let touchDragCard = null;
+        let dragInitialIds = [];
+
+        function getDomCardElements() {
+            return Array.from(container.querySelectorAll('.project-card[data-project-id]'));
+        }
+
+        function getDomCardIds() {
+            return getDomCardElements().map((el) => Number(el.dataset.projectId));
+        }
+
+        function computePreviewProjectsFromDom() {
+            const domIds = getDomCardIds();
+            const visibleSet = new Set(domIds);
+            const byId = new Map(projects.map((p) => [Number(p.id), p]));
+            const orderedVisible = domIds.map((id) => byId.get(id)).filter(Boolean);
+            let cursor = 0;
+            return projects.map((p) => (visibleSet.has(Number(p.id)) ? orderedVisible[cursor++] : p));
+        }
+
+        function syncDomPriorityBadges() {
+            const previewList = computePreviewProjectsFromDom();
+            const rankMap = new Map(previewList.map((p, idx) => [Number(p.id), idx + 1]));
+            for (const cardEl of getDomCardElements()) {
+                const pid = Number(cardEl.dataset.projectId);
+                const badgeEl = cardEl.querySelector('[data-priority-rank]');
+                if (badgeEl && rankMap.has(pid)) {
+                    badgeEl.textContent = '#' + rankMap.get(pid);
+                }
+            }
+        }
+
+        function autoScrollNearEdges(clientY) {
+            const edgeThreshold = 68;
+            const maxStep = 16;
+
+            if (scrollPane && window.innerWidth > 1180) {
+                const rect = scrollPane.getBoundingClientRect();
+                if (clientY < rect.top + edgeThreshold) {
+                    const ratio = Math.min(1, (rect.top + edgeThreshold - clientY) / edgeThreshold);
+                    scrollPane.scrollTop -= Math.ceil(maxStep * ratio);
+                } else if (clientY > rect.bottom - edgeThreshold) {
+                    const ratio = Math.min(1, (clientY - (rect.bottom - edgeThreshold)) / edgeThreshold);
+                    scrollPane.scrollTop += Math.ceil(maxStep * ratio);
+                }
+            } else {
+                if (clientY < edgeThreshold) {
+                    window.scrollBy(0, -12);
+                } else if (clientY > window.innerHeight - edgeThreshold) {
+                    window.scrollBy(0, 12);
+                }
+            }
+        }
+
+        function maybeSwapCards(activeCard, overCard, clientX, clientY) {
+            if (!activeCard || !overCard || activeCard === overCard) return;
+
+            const cards = getDomCardElements();
+            const activeIdx = cards.indexOf(activeCard);
+            const overIdx = cards.indexOf(overCard);
+            if (activeIdx === -1 || overIdx === -1) return;
+
+            const activeRect = activeCard.getBoundingClientRect();
+            const overRect = overCard.getBoundingClientRect();
+            const sameRow = Math.abs(activeRect.top - overRect.top) < overRect.height * 0.45;
+
+            if (sameRow) {
+                const midX = overRect.left + overRect.width * 0.5;
+                if (activeIdx < overIdx && clientX > midX) {
+                    overCard.after(activeCard);
+                    syncDomPriorityBadges();
+                } else if (activeIdx > overIdx && clientX < midX) {
+                    overCard.before(activeCard);
+                    syncDomPriorityBadges();
+                }
+            } else {
+                const midY = overRect.top + overRect.height * 0.5;
+                if (activeIdx < overIdx && clientY > midY) {
+                    overCard.after(activeCard);
+                    syncDomPriorityBadges();
+                } else if (activeIdx > overIdx && clientY < midY) {
+                    overCard.before(activeCard);
+                    syncDomPriorityBadges();
+                }
+            }
+        }
+
+        async function commitDomReorder(initialIds) {
+            const currentIds = getDomCardIds();
+            if (
+                initialIds.length === 0
+                || currentIds.length !== initialIds.length
+                || initialIds.join(',') === currentIds.join(',')
+            ) {
+                return;
+            }
+
+            const previousProjects = projects.slice();
+            projects = computePreviewProjectsFromDom();
+            syncDomPriorityBadges();
+            if (App.setAvailableProjects) {
+                App.setAvailableProjects(projects);
+            }
+
+            try {
+                const res = await App.apiPost('reorder_projects', {
+                    ordered_ids: projects.map((p) => p.id)
+                });
+                if (Array.isArray(res.projects)) {
+                    projects = res.projects;
+                    if (App.setAvailableProjects) {
+                        App.setAvailableProjects(projects);
+                    }
+                    syncDomPriorityBadges();
+                }
+                App.toast('Project priority order saved.', 'success', 2000);
+            } catch (err) {
+                projects = previousProjects;
+                if (App.setAvailableProjects) {
+                    App.setAvailableProjects(projects);
+                }
+                renderProjects();
+                App.toast('Failed to save priority order: ' + err.message, 'error');
+            }
+        }
+
+        // Enable native HTML5 dragging from grip handle or card surface (while keeping text in .meta-box selectable)
+        container.addEventListener('mousedown', (e) => {
+            const card = e.target.closest('.project-card');
+            if (!card) return;
+            const isInteractiveOrSelectable = Boolean(
+                e.target.closest('a, button, input, select, textarea, .meta-box')
+            );
+            if (isInteractiveOrSelectable) {
+                card.removeAttribute('draggable');
+            } else {
+                card.setAttribute('draggable', 'true');
+            }
+        });
+
+        container.addEventListener('mouseup', (e) => {
+            const card = e.target.closest('.project-card');
+            if (card && !draggedCard) {
+                card.removeAttribute('draggable');
+            }
+        });
+
+        container.addEventListener('dragstart', (e) => {
+            const card = e.target.closest('.project-card');
+            if (!card || card.getAttribute('draggable') !== 'true') {
+                e.preventDefault();
+                return;
+            }
+            draggedCard = card;
+            dragInitialIds = getDomCardIds();
+            container.classList.add('is-reordering');
+            if (e.dataTransfer) {
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', String(card.dataset.projectId || ''));
+            }
+            requestAnimationFrame(() => {
+                if (draggedCard === card) {
+                    card.classList.add('is-dragging');
+                }
+            });
+        });
+
+        container.addEventListener('dragover', (e) => {
+            if (!draggedCard) return;
+            e.preventDefault();
+            if (e.dataTransfer) {
+                e.dataTransfer.dropEffect = 'move';
+            }
+            autoScrollNearEdges(e.clientY);
+            const overCard = e.target.closest('.project-card');
+            maybeSwapCards(draggedCard, overCard, e.clientX, e.clientY);
+        });
+
+        container.addEventListener('drop', (e) => {
+            if (!draggedCard) return;
+            e.preventDefault();
+        });
+
+        container.addEventListener('dragend', () => {
+            if (!draggedCard) return;
+            const finishedCard = draggedCard;
+            const initialIds = dragInitialIds.slice();
+            draggedCard = null;
+            dragInitialIds = [];
+            finishedCard.classList.remove('is-dragging');
+            finishedCard.removeAttribute('draggable');
+            container.classList.remove('is-reordering');
+            commitDomReorder(initialIds);
+        });
+
+        // Mobile / Touch drag support via the `.project-drag-grip` handle
+        container.addEventListener('touchstart', (e) => {
+            const grip = e.target.closest('.project-drag-grip');
+            if (!grip || e.touches.length !== 1) return;
+            const card = grip.closest('.project-card');
+            if (!card) return;
+            touchDragCard = card;
+            dragInitialIds = getDomCardIds();
+            card.classList.add('is-dragging');
+            container.classList.add('is-reordering');
+        }, { passive: true });
+
+        container.addEventListener('touchmove', (e) => {
+            if (!touchDragCard || e.touches.length !== 1) return;
+            e.preventDefault();
+            const touch = e.touches[0];
+            autoScrollNearEdges(touch.clientY);
+            const targetEl = document.elementFromPoint(touch.clientX, touch.clientY);
+            const overCard = targetEl ? targetEl.closest('.project-card') : null;
+            maybeSwapCards(touchDragCard, overCard, touch.clientX, touch.clientY);
+        }, { passive: false });
+
+        function finishTouchDrag() {
+            if (!touchDragCard) return;
+            const finishedCard = touchDragCard;
+            const initialIds = dragInitialIds.slice();
+            touchDragCard = null;
+            dragInitialIds = [];
+            finishedCard.classList.remove('is-dragging');
+            container.classList.remove('is-reordering');
+            commitDomReorder(initialIds);
+        }
+
+        container.addEventListener('touchend', finishTouchDrag);
+        container.addEventListener('touchcancel', finishTouchDrag);
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
         if (App.setAvailableProjects) {
             App.setAvailableProjects(projects);
         }
         renderProjects();
         renderGlobalEvents();
+        initProjectDragReorder();
 
         document.getElementById('addProjectBtn').addEventListener('click', openAddModal);
 

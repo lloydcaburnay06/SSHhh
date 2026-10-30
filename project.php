@@ -33,8 +33,8 @@ require __DIR__ . '/src/Views/header.php';
     </nav>
 
     <div class="project-layout">
-        <!-- Left Side Content Stack: Project Hero + Card/Grid Deployment Commands -->
-        <div class="project-primary-stack">
+        <!-- Left Independently Scrollable Pane: Project Hero + Card/Grid Commands + Complete Event Log -->
+        <div class="project-left-pane">
             <section class="project-hero">
                 <div class="hero-info">
                     <h1>
@@ -97,9 +97,42 @@ require __DIR__ . '/src/Views/header.php';
                     </form>
                 </div>
             </section>
+
+            <section class="panel project-events-panel">
+                <div class="panel-header event-log-header">
+                    <div>
+                        <h2 class="panel-title">Complete Event Log</h2>
+                        <span class="panel-subtitle">Full audit &amp; execution history: deployments, individual commands, SSH tests, and settings updates</span>
+                    </div>
+                    <div class="event-filter-controls">
+                        <select class="form-select" id="eventStatusFilter">
+                            <option value="all">All Statuses</option>
+                            <option value="success">Succeeded</option>
+                            <option value="failed">Failed</option>
+                            <option value="warning">Warning</option>
+                            <option value="info">Info / Audit</option>
+                        </select>
+                        <input type="search" class="search-input event-search-input" id="eventSearchInput" placeholder="Search logs, commands, output...">
+                        <div class="event-filter-btns">
+                            <button type="button" class="btn btn-ghost btn-sm" id="refreshEventsBtn">Refresh</button>
+                            <button type="button" class="btn btn-danger btn-sm" id="clearEventsBtn">Clear Logs</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="event-tabs-bar">
+                    <div class="event-tabs" id="eventCategoryTabs">
+                        <button type="button" class="event-tab active" data-cat="all">All Events <span class="tab-count" id="cnt-all">0</span></button>
+                        <button type="button" class="event-tab" data-cat="deployment">Deployments <span class="tab-count" id="cnt-deployment">0</span></button>
+                        <button type="button" class="event-tab" data-cat="command">Commands <span class="tab-count" id="cnt-command">0</span></button>
+                        <button type="button" class="event-tab" data-cat="ssh">SSH Tests <span class="tab-count" id="cnt-ssh">0</span></button>
+                        <button type="button" class="event-tab" data-cat="audit">Config &amp; Audit <span class="tab-count" id="cnt-audit">0</span></button>
+                    </div>
+                </div>
+                <div class="events-list" id="projectEventsList"></div>
+            </section>
         </div>
 
-        <!-- Right Side Dock: Live SSH Console -->
+        <!-- Right Independently Scrollable Pane: Live SSH Console -->
         <aside class="project-console-aside">
             <div class="panel terminal-panel" id="liveTerminalPanel">
                 <div class="terminal-header">
@@ -121,40 +154,6 @@ require __DIR__ . '/src/Views/header.php';
                 <pre class="terminal-output" id="terminalOutput">Ready. Click "Deploy Now (Execute All)" to run the full pipeline or "&#9654; Run" on any individual command card.</pre>
             </div>
         </aside>
-
-        <!-- Left Side Bottom: Complete Event Log -->
-        <section class="panel project-events-panel">
-            <div class="panel-header event-log-header">
-                <div>
-                    <h2 class="panel-title">Complete Event Log</h2>
-                    <span class="panel-subtitle">Full audit &amp; execution history: deployments, individual commands, SSH tests, and settings updates</span>
-                </div>
-                <div class="event-filter-controls">
-                    <select class="form-select" id="eventStatusFilter">
-                        <option value="all">All Statuses</option>
-                        <option value="success">Succeeded</option>
-                        <option value="failed">Failed</option>
-                        <option value="warning">Warning</option>
-                        <option value="info">Info / Audit</option>
-                    </select>
-                    <input type="search" class="search-input event-search-input" id="eventSearchInput" placeholder="Search logs, commands, output...">
-                    <div class="event-filter-btns">
-                        <button type="button" class="btn btn-ghost btn-sm" id="refreshEventsBtn">Refresh</button>
-                        <button type="button" class="btn btn-danger btn-sm" id="clearEventsBtn">Clear Logs</button>
-                    </div>
-                </div>
-            </div>
-            <div class="event-tabs-bar">
-                <div class="event-tabs" id="eventCategoryTabs">
-                    <button type="button" class="event-tab active" data-cat="all">All Events <span class="tab-count" id="cnt-all">0</span></button>
-                    <button type="button" class="event-tab" data-cat="deployment">Deployments <span class="tab-count" id="cnt-deployment">0</span></button>
-                    <button type="button" class="event-tab" data-cat="command">Commands <span class="tab-count" id="cnt-command">0</span></button>
-                    <button type="button" class="event-tab" data-cat="ssh">SSH Tests <span class="tab-count" id="cnt-ssh">0</span></button>
-                    <button type="button" class="event-tab" data-cat="audit">Config &amp; Audit <span class="tab-count" id="cnt-audit">0</span></button>
-                </div>
-            </div>
-            <div class="events-list" id="projectEventsList"></div>
-        </section>
     </div>
 </main>
 
@@ -168,7 +167,7 @@ require __DIR__ . '/src/Views/header.php';
         'events'       => $eventsData,
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
 </script>
-<script src="assets/js/common.js?v=1.1.3"></script>
-<script src="assets/js/project.js?v=1.1.3"></script>
+<script src="assets/js/common.js?v=1.1.5"></script>
+<script src="assets/js/project.js?v=1.1.5"></script>
 </body>
 </html>

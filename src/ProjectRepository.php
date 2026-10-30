@@ -29,11 +29,70 @@ final class ProjectRepository
                 (SELECT COUNT(*) FROM `project_commands` c WHERE c.`project_id` = p.`id` AND c.`is_enabled` = 1) AS `enabled_command_count`,
                 (SELECT COUNT(*) FROM `event_logs` e WHERE e.`project_id` = p.`id` AND e.`category` = 'deployment') AS `deployment_count`
             FROM `projects` p
-            ORDER BY p.`updated_at` DESC, p.`id` DESC
+            ORDER BY p.`sort_order` ASC, p.`id` DESC
         SQL;
 
         $rows = $this->pdo->query($sql)->fetchAll();
         return array_map([$this, 'sanitizeProjectRow'], $rows);
+    }
+
+    /**
+     * Persists user-arranged priority ordering across all projects without altering `updated_at`.
+     *
+     * @param array<int, mixed> $orderedIds
+     * @return array<int, array<string, mixed>>
+     */
+    public function reorder(array $orderedIds): array
+    {
+        $cleanIds = [];
+        foreach ($orderedIds as $rawId) {
+            $pid = (int) $rawId;
+            if ($pid > 0 && !in_array($pid, $cleanIds, true)) {
+                $cleanIds[] = $pid;
+            }
+        }
+
+        if ($cleanIds === []) {
+            throw new InvalidArgumentException('Project order list cannot be empty.');
+        }
+
+        $allDbIds = array_map(
+            'intval',
+            $this->pdo->query('SELECT `id` FROM `projects` ORDER BY `sort_order` ASC, `id` DESC')->fetchAll(PDO::FETCH_COLUMN)
+        );
+        $existingSet = array_flip($allDbIds);
+
+        $finalOrder = [];
+        foreach ($cleanIds as $pid) {
+            if (isset($existingSet[$pid])) {
+                $finalOrder[] = $pid;
+            }
+        }
+        foreach ($allDbIds as $pid) {
+            if (!in_array($pid, $finalOrder, true)) {
+                $finalOrder[] = $pid;
+            }
+        }
+
+        $this->pdo->beginTransaction();
+        try {
+            $stmt = $this->pdo->prepare(
+                'UPDATE `projects` SET `sort_order` = :sort_order, `updated_at` = `updated_at` WHERE `id` = :id'
+            );
+            $pos = 1;
+            foreach ($finalOrder as $pid) {
+                $stmt->execute([
+                    ':sort_order' => $pos++,
+                    ':id'         => $pid,
+                ]);
+            }
+            $this->pdo->commit();
+        } catch (\Throwable $e) {
+            $this->pdo->rollBack();
+            throw $e;
+        }
+
+        return $this->listAll();
     }
 
     /**
@@ -187,10 +246,13 @@ final class ProjectRepository
 
         $this->pdo->beginTransaction();
         try {
+            $nextSortOrder = (int) $this->pdo->query('SELECT COALESCE(MAX(`sort_order`), 0) FROM `projects`')->fetchColumn() + 1;
+
             $stmt = $this->pdo->prepare(<<<'SQL'
                 INSERT INTO `projects` (
                     `name`,
                     `environment`,
+                    `sort_order`,
                     `description`,
                     `repo_branch`,
                     `remote_path`,
@@ -206,6 +268,7 @@ final class ProjectRepository
                 ) VALUES (
                     :name,
                     :environment,
+                    :sort_order,
                     :description,
                     :repo_branch,
                     :remote_path,
@@ -224,6 +287,7 @@ final class ProjectRepository
             $stmt->execute([
                 ':name'                     => $data['name'],
                 ':environment'              => $data['environment'],
+                ':sort_order'               => $nextSortOrder,
                 ':description'              => $data['description'],
                 ':repo_branch'              => $data['repo_branch'],
                 ':remote_path'              => $data['remote_path'],
@@ -867,6 +931,7 @@ final class ProjectRepository
         );
 
         $row['id'] = (int) $row['id'];
+        $row['sort_order'] = isset($row['sort_order']) ? (int) $row['sort_order'] : 0;
         $row['ssh_port'] = (int) $row['ssh_port'];
         $row['ssh_timeout'] = (int) $row['ssh_timeout'];
         $row['command_timeout'] = (int) $row['command_timeout'];

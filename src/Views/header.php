@@ -21,9 +21,9 @@ $appTagline = (string) ($app->config()['app_tagline'] ?? 'Deployments so quiet, 
     <link rel="icon" type="image/svg+xml" href="assets/img/icon.svg">
     <link rel="icon" type="image/png" sizes="32x32" href="assets/img/favicon-32.png">
     <link rel="apple-touch-icon" sizes="180x180" href="assets/img/apple-touch-icon.png">
-    <link rel="stylesheet" href="assets/css/app.css?v=1.1.3">
+    <link rel="stylesheet" href="assets/css/app.css?v=1.1.5">
 </head>
-<body>
+<body class="app-shell">
     <header class="topbar">
         <div class="topbar-inner">
             <a href="index.php" class="brand" aria-label="<?= htmlspecialchars($appName . ' — ' . $appTagline, ENT_QUOTES, 'UTF-8') ?>">

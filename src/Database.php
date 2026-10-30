@@ -52,14 +52,20 @@ final class Database
             }
         }
 
-        $markerFile = rtrim($storageDir, '/\\') . '/.schema_v1.ready';
+        $markerFile = rtrim($storageDir, '/\\') . '/.schema_v2.ready';
         if ($needsMigration || !is_file($markerFile)) {
             $this->migrate();
             @file_put_contents($markerFile, date('c'));
         } else {
-            // Quick sanity check in case tables were dropped manually via phpMyAdmin
+            // Quick sanity check in case tables or columns were altered manually via phpMyAdmin
             $stmt = $this->pdo->query("SHOW TABLES LIKE 'event_logs'");
-            if ($stmt === false || $stmt->fetchColumn() === false) {
+            $colStmt = $this->pdo->query("SHOW COLUMNS FROM `projects` LIKE 'sort_order'");
+            if (
+                $stmt === false
+                || $stmt->fetchColumn() === false
+                || $colStmt === false
+                || $colStmt->fetch() === false
+            ) {
                 $this->migrate();
                 @file_put_contents($markerFile, date('c'));
             }
@@ -78,6 +84,7 @@ final class Database
                 `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
                 `name` VARCHAR(150) NOT NULL,
                 `environment` VARCHAR(40) NOT NULL DEFAULT 'production',
+                `sort_order` INT NOT NULL DEFAULT 0,
                 `description` TEXT NULL,
                 `repo_branch` VARCHAR(120) NOT NULL DEFAULT 'main',
                 `remote_path` VARCHAR(500) NOT NULL DEFAULT '',
@@ -98,9 +105,24 @@ final class Database
                 `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 PRIMARY KEY (`id`),
                 KEY `idx_environment` (`environment`),
+                KEY `idx_sort_order` (`sort_order`, `id`),
                 KEY `idx_updated_at` (`updated_at`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         SQL);
+
+        // Non-destructive upgrade for existing installations without `projects.sort_order`
+        $colStmt = $this->pdo->query("SHOW COLUMNS FROM `projects` LIKE 'sort_order'");
+        if ($colStmt === false || $colStmt->fetch() === false) {
+            $this->pdo->exec(
+                'ALTER TABLE `projects` ADD COLUMN `sort_order` INT NOT NULL DEFAULT 0 AFTER `environment`, ADD KEY `idx_sort_order` (`sort_order`, `id`)'
+            );
+            $existingIds = $this->pdo->query('SELECT `id` FROM `projects` ORDER BY `updated_at` DESC, `id` DESC')->fetchAll(PDO::FETCH_COLUMN);
+            $pos = 1;
+            $upd = $this->pdo->prepare('UPDATE `projects` SET `sort_order` = :pos, `updated_at` = `updated_at` WHERE `id` = :id');
+            foreach ($existingIds as $pid) {
+                $upd->execute([':pos' => $pos++, ':id' => (int) $pid]);
+            }
+        }
 
         $this->pdo->exec(<<<'SQL'
             CREATE TABLE IF NOT EXISTS `project_commands` (
