@@ -203,6 +203,20 @@ try {
                 'project'  => $app->projects()->find($projectId),
             ]);
 
+        case 'set_app_state':
+            $projectId = (int) ($body['project_id'] ?? 0);
+            if ($projectId <= 0) {
+                throw new InvalidArgumentException('Project ID is required.');
+            }
+            $state = trim((string) ($body['app_state'] ?? 'unknown'));
+            $app->projects()->updateProjectAppState($projectId, $state);
+            respondJson([
+                'ok'       => true,
+                'project'  => $app->projects()->find($projectId),
+                'projects' => $app->projects()->listAll(),
+                'stats'    => $app->projects()->getDashboardStats(),
+            ]);
+
         case 'test_ssh':
             $app->releaseSessionLock();
             $result = $app->runner()->testConnection($body);

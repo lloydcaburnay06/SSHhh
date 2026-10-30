@@ -922,12 +922,141 @@
         });
     }
 
+    /**
+     * Reusable, accessible, stylish confirmation dialog modal that returns a Promise<boolean>.
+     *
+     * @param {Object} options
+     * @param {string} [options.title='Confirm Action']
+     * @param {string} [options.subtitle='']
+     * @param {string} [options.icon='⚡']
+     * @param {string} [options.message='']
+     * @param {string} [options.warning='']
+     * @param {string} [options.code='']
+     * @param {string} [options.confirmText='Confirm']
+     * @param {string} [options.confirmClass='btn-primary']
+     * @param {string} [options.cancelText='Cancel']
+     * @param {boolean} [options.focusCancel=false]
+     * @returns {Promise<boolean>}
+     */
+    function confirmAction(options = {}) {
+        return new Promise((resolve) => {
+            const modal = document.getElementById('confirmActionModal');
+            if (!modal) {
+                const rawMsg = options.message ? options.message.replace(/<[^>]+>/g, '') : (options.title || 'Are you sure?');
+                resolve(window.confirm(rawMsg));
+                return;
+            }
+
+            const titleEl = document.getElementById('confirmModalTitle');
+            const subEl = document.getElementById('confirmModalSubtitle');
+            const iconEl = document.getElementById('confirmModalIcon');
+            const msgEl = document.getElementById('confirmModalMessage');
+            const warnEl = document.getElementById('confirmModalWarning');
+            const codeEl = document.getElementById('confirmModalCode');
+            const confirmBtn = document.getElementById('confirmModalConfirmBtn');
+            const cancelBtn = document.getElementById('confirmModalCancelBtn');
+            const closeBtn = document.getElementById('confirmModalCloseBtn');
+
+            if (titleEl) titleEl.textContent = options.title || 'Confirm Action';
+            if (subEl) {
+                subEl.textContent = options.subtitle || '';
+                subEl.style.display = options.subtitle ? 'block' : 'none';
+            }
+            if (iconEl) {
+                iconEl.className = 'confirm-icon-bubble' + (options.iconVariant ? ' variant-' + options.iconVariant : '');
+                iconEl.innerHTML = options.icon || '⚡';
+            }
+
+            if (msgEl) {
+                if (options.message) {
+                    msgEl.innerHTML = options.message;
+                    msgEl.style.display = 'block';
+                } else {
+                    msgEl.style.display = 'none';
+                }
+            }
+
+            if (warnEl) {
+                if (options.warning) {
+                    warnEl.innerHTML = options.warning;
+                    warnEl.style.display = 'flex';
+                } else {
+                    warnEl.style.display = 'none';
+                }
+            }
+
+            if (codeEl) {
+                const codeSnippet = options.code || options.codeSnippet;
+                if (codeSnippet) {
+                    codeEl.textContent = codeSnippet;
+                    codeEl.style.display = 'block';
+                } else {
+                    codeEl.style.display = 'none';
+                }
+            }
+
+            if (confirmBtn) {
+                confirmBtn.textContent = options.confirmText || 'Confirm';
+                confirmBtn.className = 'btn ' + (options.confirmClass || 'btn-primary');
+            }
+            if (cancelBtn) {
+                cancelBtn.textContent = options.cancelText || 'Cancel';
+            }
+
+            modal.style.display = 'flex';
+            void modal.offsetWidth; // Force layout reflow for animation
+            modal.classList.add('show');
+            modal.setAttribute('aria-hidden', 'false');
+
+            if (options.focusCancel && cancelBtn) {
+                cancelBtn.focus();
+            } else if (confirmBtn) {
+                confirmBtn.focus();
+            }
+
+            function cleanup(result) {
+                modal.classList.remove('show');
+                modal.setAttribute('aria-hidden', 'true');
+                setTimeout(() => {
+                    modal.style.display = 'none';
+                }, 180);
+                if (confirmBtn) confirmBtn.removeEventListener('click', onConfirm);
+                if (cancelBtn) cancelBtn.removeEventListener('click', onCancel);
+                if (closeBtn) closeBtn.removeEventListener('click', onCancel);
+                modal.removeEventListener('click', onBackdropClick);
+                document.removeEventListener('keydown', onKeyDown);
+                resolve(result);
+            }
+
+            function onConfirm() { cleanup(true); }
+            function onCancel() { cleanup(false); }
+            function onBackdropClick(e) {
+                if (e.target === modal) {
+                    cleanup(false);
+                }
+            }
+            function onKeyDown(e) {
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    cleanup(false);
+                }
+            }
+
+            if (confirmBtn) confirmBtn.addEventListener('click', onConfirm);
+            if (cancelBtn) cancelBtn.addEventListener('click', onCancel);
+            if (closeBtn) closeBtn.addEventListener('click', onCancel);
+            modal.addEventListener('click', onBackdropClick);
+            document.addEventListener('keydown', onKeyDown);
+        });
+    }
+
     window.DeployerApp = {
         escapeHtml,
         ansiToHtml,
         formatDuration,
         formatDateTime,
         toast,
+        confirmAction,
         apiGet,
         apiPost,
         streamExecute,

@@ -21,7 +21,7 @@ $appTagline = (string) ($app->config()['app_tagline'] ?? 'Deployments so quiet, 
     <link rel="icon" type="image/svg+xml" href="assets/img/icon.svg">
     <link rel="icon" type="image/png" sizes="32x32" href="assets/img/favicon-32.png">
     <link rel="apple-touch-icon" sizes="180x180" href="assets/img/apple-touch-icon.png">
-    <link rel="stylesheet" href="assets/css/app.css?v=1.2.0">
+    <link rel="stylesheet" href="assets/css/app.css?v=1.3.0">
 </head>
 <body class="app-shell">
     <header class="topbar">
@@ -59,3 +59,26 @@ $appTagline = (string) ($app->config()['app_tagline'] ?? 'Deployments so quiet, 
         window.DEPLOYER_CSRF = <?= json_encode($csrfToken, JSON_UNESCAPED_SLASHES) ?>;
         window.DEPLOYER_APP_NAME = <?= json_encode($appName, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
     </script>
+
+    <!-- Global In-App Confirmation Modal -->
+    <div class="modal-backdrop confirm-modal-backdrop" id="confirmActionModal" aria-hidden="true" style="display:none;">
+        <div class="modal confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirmModalTitle">
+            <div class="confirm-modal-header">
+                <div class="confirm-icon-bubble" id="confirmModalIcon">⚡</div>
+                <div style="min-width:0; flex:1;">
+                    <h3 id="confirmModalTitle" class="confirm-modal-title">Confirm Action</h3>
+                    <p id="confirmModalSubtitle" class="confirm-modal-subtitle" style="display:none;"></p>
+                </div>
+                <button type="button" class="icon-btn" id="confirmModalCloseBtn" title="Close">&times;</button>
+            </div>
+            <div class="confirm-modal-body">
+                <div id="confirmModalMessage" class="confirm-modal-message"></div>
+                <div id="confirmModalWarning" class="confirm-modal-warning" style="display:none;"></div>
+                <pre id="confirmModalCode" class="confirm-modal-code" style="display:none;"></pre>
+            </div>
+            <div class="confirm-modal-footer">
+                <button type="button" class="btn btn-ghost" id="confirmModalCancelBtn">Cancel</button>
+                <button type="button" class="btn btn-primary" id="confirmModalConfirmBtn">Confirm</button>
+            </div>
+        </div>
+    </div>

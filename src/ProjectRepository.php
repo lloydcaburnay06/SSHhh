@@ -101,6 +101,7 @@ final class ProjectRepository
     public function getDashboardStats(): array
     {
         $totalProjects = (int) $this->pdo->query('SELECT COUNT(*) FROM `projects`')->fetchColumn();
+        $downProjects = (int) $this->pdo->query("SELECT COUNT(*) FROM `projects` WHERE `app_status` = 'down'")->fetchColumn();
         $deployStatsStmt = $this->pdo->query(<<<'SQL'
             SELECT
                 COUNT(*) AS `total`,
@@ -113,6 +114,7 @@ final class ProjectRepository
 
         return [
             'total_projects'         => $totalProjects,
+            'down_projects'          => $downProjects,
             'total_deployments'      => (int) ($dRow['total'] ?? 0),
             'successful_deployments' => (int) ($dRow['succeeded'] ?? 0),
             'failed_deployments'     => (int) ($dRow['failed'] ?? 0),
@@ -306,8 +308,8 @@ final class ProjectRepository
 
             // Seed command pipeline from either a cloned project template or a built-in starter preset
             $cmdStmt = $this->pdo->prepare(<<<'SQL'
-                INSERT INTO `project_commands` (`project_id`, `name`, `command`, `sort_order`, `is_enabled`, `stop_on_error`)
-                VALUES (:project_id, :name, :command, :sort_order, :is_enabled, :stop_on_error)
+                INSERT INTO `project_commands` (`project_id`, `name`, `command`, `sort_order`, `is_enabled`, `stop_on_error`, `app_state_trigger`)
+                VALUES (:project_id, :name, :command, :sort_order, :is_enabled, :stop_on_error, :app_state_trigger)
             SQL);
 
             $order = 1;
@@ -315,12 +317,13 @@ final class ProjectRepository
             if ($templateProject !== null && is_array($clonedCommands)) {
                 foreach ($clonedCommands as $cmd) {
                     $cmdStmt->execute([
-                        ':project_id'    => $projectId,
-                        ':name'          => (string) $cmd['name'],
-                        ':command'       => (string) $cmd['command'],
-                        ':sort_order'    => $order++,
-                        ':is_enabled'    => !empty($cmd['is_enabled']) ? 1 : 0,
-                        ':stop_on_error' => !empty($cmd['stop_on_error']) ? 1 : 0,
+                        ':project_id'        => $projectId,
+                        ':name'              => (string) $cmd['name'],
+                        ':command'           => (string) $cmd['command'],
+                        ':sort_order'        => $order++,
+                        ':is_enabled'        => !empty($cmd['is_enabled']) ? 1 : 0,
+                        ':stop_on_error'     => !empty($cmd['stop_on_error']) ? 1 : 0,
+                        ':app_state_trigger' => in_array($cmd['app_state_trigger'] ?? 'none', ['none', 'down', 'up'], true) ? (string) $cmd['app_state_trigger'] : 'none',
                     ]);
                     $seededCount++;
                 }
@@ -334,12 +337,13 @@ final class ProjectRepository
                 $starterCommands = $this->getStarterPresetCommands($preset, $data['repo_branch']);
                 foreach ($starterCommands as $cmd) {
                     $cmdStmt->execute([
-                        ':project_id'    => $projectId,
-                        ':name'          => $cmd['name'],
-                        ':command'       => $cmd['command'],
-                        ':sort_order'    => $order++,
-                        ':is_enabled'    => 1,
-                        ':stop_on_error' => 1,
+                        ':project_id'        => $projectId,
+                        ':name'              => $cmd['name'],
+                        ':command'           => $cmd['command'],
+                        ':sort_order'        => $order++,
+                        ':is_enabled'        => 1,
+                        ':stop_on_error'     => 1,
+                        ':app_state_trigger' => (string) ($cmd['app_state_trigger'] ?? 'none'),
                     ]);
                     $seededCount++;
                 }
@@ -666,12 +670,13 @@ final class ProjectRepository
             }
 
             $normalized[] = [
-                'id'            => $cmdId,
-                'name'          => mb_substr($nameText, 0, 150),
-                'command'       => $cmdText,
-                'sort_order'    => $order++,
-                'is_enabled'    => !empty($raw['is_enabled']) ? 1 : 0,
-                'stop_on_error' => array_key_exists('stop_on_error', $raw) ? (!empty($raw['stop_on_error']) ? 1 : 0) : 1,
+                'id'                => $cmdId,
+                'name'              => mb_substr($nameText, 0, 150),
+                'command'           => $cmdText,
+                'sort_order'        => $order++,
+                'is_enabled'        => !empty($raw['is_enabled']) ? 1 : 0,
+                'stop_on_error'     => array_key_exists('stop_on_error', $raw) ? (!empty($raw['stop_on_error']) ? 1 : 0) : 1,
+                'app_state_trigger' => in_array($raw['app_state_trigger'] ?? 'none', ['none', 'down', 'up'], true) ? (string) $raw['app_state_trigger'] : 'none',
             ];
         }
 
@@ -691,6 +696,7 @@ final class ProjectRepository
                     || (int) $prev['sort_order'] !== $item['sort_order']
                     || (int) $prev['is_enabled'] !== $item['is_enabled']
                     || (int) $prev['stop_on_error'] !== $item['stop_on_error']
+                    || (string) ($prev['app_state_trigger'] ?? 'none') !== $item['app_state_trigger']
                 ) {
                     $updatedCount++;
                 }
@@ -716,9 +722,9 @@ final class ProjectRepository
 
             $insStmt = $this->pdo->prepare(<<<'SQL'
                 INSERT INTO `project_commands` (
-                    `project_id`, `name`, `command`, `sort_order`, `is_enabled`, `stop_on_error`
+                    `project_id`, `name`, `command`, `sort_order`, `is_enabled`, `stop_on_error`, `app_state_trigger`
                 ) VALUES (
-                    :project_id, :name, :command, :sort_order, :is_enabled, :stop_on_error
+                    :project_id, :name, :command, :sort_order, :is_enabled, :stop_on_error, :app_state_trigger
                 )
             SQL);
 
@@ -728,29 +734,32 @@ final class ProjectRepository
                     `command` = :command,
                     `sort_order` = :sort_order,
                     `is_enabled` = :is_enabled,
-                    `stop_on_error` = :stop_on_error
+                    `stop_on_error` = :stop_on_error,
+                    `app_state_trigger` = :app_state_trigger
                 WHERE `id` = :id AND `project_id` = :project_id
             SQL);
 
             foreach ($normalized as $item) {
                 if ($item['id'] === null) {
                     $insStmt->execute([
-                        ':project_id'    => $projectId,
-                        ':name'          => $item['name'],
-                        ':command'       => $item['command'],
-                        ':sort_order'    => $item['sort_order'],
-                        ':is_enabled'    => $item['is_enabled'],
-                        ':stop_on_error' => $item['stop_on_error'],
+                        ':project_id'        => $projectId,
+                        ':name'              => $item['name'],
+                        ':command'           => $item['command'],
+                        ':sort_order'        => $item['sort_order'],
+                        ':is_enabled'        => $item['is_enabled'],
+                        ':stop_on_error'     => $item['stop_on_error'],
+                        ':app_state_trigger' => $item['app_state_trigger'],
                     ]);
                 } else {
                     $updStmt->execute([
-                        ':id'            => $item['id'],
-                        ':project_id'    => $projectId,
-                        ':name'          => $item['name'],
-                        ':command'       => $item['command'],
-                        ':sort_order'    => $item['sort_order'],
-                        ':is_enabled'    => $item['is_enabled'],
-                        ':stop_on_error' => $item['stop_on_error'],
+                        ':id'                => $item['id'],
+                        ':project_id'        => $projectId,
+                        ':name'              => $item['name'],
+                        ':command'           => $item['command'],
+                        ':sort_order'        => $item['sort_order'],
+                        ':is_enabled'        => $item['is_enabled'],
+                        ':stop_on_error'     => $item['stop_on_error'],
+                        ':app_state_trigger' => $item['app_state_trigger'],
                     ]);
                 }
             }
@@ -822,6 +831,32 @@ final class ProjectRepository
             ':duration_ms' => $durationMs,
             ':id'          => $projectId,
         ]);
+    }
+
+    public function updateProjectAppState(int $projectId, string $state): void
+    {
+        $valid = ['unknown', 'up', 'down'];
+        if (!in_array($state, $valid, true)) {
+            throw new InvalidArgumentException(sprintf('Invalid app status "%s".', $state));
+        }
+
+        $stmt = $this->pdo->prepare('UPDATE `projects` SET `app_status` = :state, `app_status_updated_at` = NOW() WHERE `id` = :id');
+        $stmt->execute([':state' => $state, ':id' => $projectId]);
+
+        $project = $this->find($projectId);
+        if ($project) {
+            $target = $this->formatSshTarget((string) $project['ssh_username'], (string) $project['ssh_host'], (int) $project['ssh_port'], (string) $project['remote_path']);
+            $this->logger->log([
+                'project_id'   => $projectId,
+                'project_name' => (string) $project['name'],
+                'category'     => 'audit',
+                'event_type'   => 'app_state_changed',
+                'status'       => $state === 'down' ? 'warning' : ($state === 'up' ? 'success' : 'info'),
+                'title'        => sprintf('App status changed to %s', strtoupper($state)),
+                'ssh_target'   => $target,
+                'output_log'   => sprintf('Project "%s" application status marked as %s.', $project['name'], strtoupper($state)),
+            ]);
+        }
     }
 
     public function updateHostFingerprint(int $projectId, string $fingerprint): void
@@ -942,6 +977,8 @@ final class ProjectRepository
         $row['has_password'] = $hasPassword;
         $row['has_private_key'] = $hasKey;
         $row['has_passphrase'] = $hasPassphrase;
+        $row['app_status'] = (string) ($row['app_status'] ?? 'unknown');
+        $row['app_status_updated_at'] = $row['app_status_updated_at'] ?? null;
 
         return $row;
     }
@@ -957,6 +994,7 @@ final class ProjectRepository
         $row['sort_order'] = (int) $row['sort_order'];
         $row['is_enabled'] = (bool) $row['is_enabled'];
         $row['stop_on_error'] = (bool) $row['stop_on_error'];
+        $row['app_state_trigger'] = (string) ($row['app_state_trigger'] ?? 'none');
         $row['last_exit_code'] = $row['last_exit_code'] !== null ? (int) $row['last_exit_code'] : null;
         $row['last_duration_ms'] = $row['last_duration_ms'] !== null ? (int) $row['last_duration_ms'] : null;
 
@@ -964,7 +1002,7 @@ final class ProjectRepository
     }
 
     /**
-     * @return array<int, array{name:string,command:string}>
+     * @return array<int, array{name:string,command:string,app_state_trigger?:string}>
      */
     private function getStarterPresetCommands(string $preset, string $branch): array
     {
@@ -972,12 +1010,12 @@ final class ProjectRepository
 
         return match ($preset) {
             'laravel' => [
-                ['name' => 'Enable maintenance mode', 'command' => 'php artisan down || true'],
-                ['name' => 'Pull latest code', 'command' => "git pull origin {$safeBranch}"],
-                ['name' => 'Install Composer dependencies', 'command' => 'composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev'],
-                ['name' => 'Run database migrations', 'command' => 'php artisan migrate --force'],
-                ['name' => 'Rebuild config & route cache', 'command' => 'php artisan optimize'],
-                ['name' => 'Bring application live', 'command' => 'php artisan up'],
+                ['name' => 'Enable maintenance mode', 'command' => 'php artisan down || true', 'app_state_trigger' => 'down'],
+                ['name' => 'Pull latest code', 'command' => "git pull origin {$safeBranch}", 'app_state_trigger' => 'none'],
+                ['name' => 'Install Composer dependencies', 'command' => 'composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev', 'app_state_trigger' => 'none'],
+                ['name' => 'Run database migrations', 'command' => 'php artisan migrate --force', 'app_state_trigger' => 'none'],
+                ['name' => 'Rebuild config & route cache', 'command' => 'php artisan optimize', 'app_state_trigger' => 'none'],
+                ['name' => 'Bring application live', 'command' => 'php artisan up', 'app_state_trigger' => 'up'],
             ],
             'php_composer' => [
                 ['name' => 'Check repository status', 'command' => 'git status -sb'],

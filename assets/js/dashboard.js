@@ -9,18 +9,42 @@
 
     function updateStats(stats) {
         if (!stats) return;
-        document.getElementById('statTotalProjects').textContent = stats.total_projects ?? 0;
-        document.getElementById('statTotalDeploys').textContent = stats.total_deployments ?? 0;
-        document.getElementById('statSuccessDeploys').textContent = stats.successful_deployments ?? 0;
-        document.getElementById('statFailedDeploys').textContent = stats.failed_deployments ?? 0;
+        const totalProjEl = document.getElementById('statTotalProjects');
+        if (totalProjEl) totalProjEl.textContent = stats.total_projects ?? 0;
+        const downProjEl = document.getElementById('statDownProjects');
+        if (downProjEl) downProjEl.textContent = stats.down_projects ?? 0;
+        const totalDepEl = document.getElementById('statTotalDeploys');
+        if (totalDepEl) totalDepEl.textContent = stats.total_deployments ?? 0;
+        const succDepEl = document.getElementById('statSuccessDeploys');
+        if (succDepEl) succDepEl.textContent = stats.successful_deployments ?? 0;
+        const failDepEl = document.getElementById('statFailedDeploys');
+        if (failDepEl) failDepEl.textContent = stats.failed_deployments ?? 0;
     }
 
     function renderProjects() {
         const container = document.getElementById('projectsContainer');
         const q = searchQuery.toLowerCase();
 
+        const downCount = projects.filter((p) => p.app_status === 'down').length;
+        const downCountEl = document.getElementById('downFilterCount');
+        if (downCountEl) {
+            downCountEl.textContent = downCount;
+        }
+        const downPill = document.querySelector('#envFilterPills [data-env="app-down"]');
+        if (downPill) {
+            downPill.classList.toggle('has-down', downCount > 0);
+        }
+        const statDownProjectsEl = document.getElementById('statDownProjects');
+        if (statDownProjectsEl) {
+            statDownProjectsEl.textContent = downCount;
+        }
+
         const filtered = projects.filter((p) => {
-            if (activeEnv !== 'all' && p.environment !== activeEnv) return false;
+            if (activeEnv === 'app-down') {
+                if (p.app_status !== 'down') return false;
+            } else if (activeEnv !== 'all' && p.environment !== activeEnv) {
+                return false;
+            }
             if (!q) return true;
             const hay = [p.name, p.ssh_host, p.ssh_username, p.remote_path, p.repo_branch, p.description]
                 .filter(Boolean)
@@ -63,9 +87,30 @@
                 : 'No deployments run yet';
 
             const priorityRank = rankById.get(Number(p.id)) || 1;
+            const isDown = (p.app_status === 'down');
+
+            const downStripHtml = isDown ? `
+                <div class="card-down-strip">
+                    <div class="card-down-msg">
+                        <span class="down-warning-dot" aria-hidden="true"></span>
+                        <strong>APP IS CURRENTLY DOWN</strong>
+                        <span>(Maintenance mode active)</span>
+                    </div>
+                    <button type="button" class="btn btn-xs btn-outline-down" data-action="toggle-state" data-id="${p.id}" data-target-state="up" title="Manually mark application as UP">
+                        Mark Up 🟢
+                    </button>
+                </div>
+            ` : '';
+
+            const appBadgeHtml = isDown
+                ? `<span class="badge badge-down"><span class="down-warning-dot" aria-hidden="true"></span> App Down</span>`
+                : (p.app_status === 'up'
+                    ? `<span class="badge badge-up">&#9679; App Up</span>`
+                    : '');
 
             return `
-                <article class="project-card" data-project-id="${p.id}">
+                <article class="project-card ${isDown ? 'app-down' : ''}" data-project-id="${p.id}">
+                    ${downStripHtml}
                     <div class="project-card-header">
                         <div class="project-card-heading-left">
                             <div class="project-drag-grip" title="Drag to arrange project priority" aria-label="Drag to arrange project priority">
@@ -83,7 +128,10 @@
                                 ${p.description ? `<p class="project-card-desc">${App.escapeHtml(p.description)}</p>` : ''}
                             </div>
                         </div>
-                        <span class="badge env-${App.escapeHtml(p.environment)}">${App.escapeHtml(p.environment)}</span>
+                        <div class="project-card-badges">
+                            ${appBadgeHtml}
+                            <span class="badge env-${App.escapeHtml(p.environment)}">${App.escapeHtml(p.environment)}</span>
+                        </div>
                     </div>
 
                     <div class="meta-box">
@@ -103,6 +151,18 @@
                             <span class="meta-key">Branch &amp; Vault</span>
                             <span class="meta-val" style="color:#34d399;">
                                 ${App.escapeHtml(p.repo_branch)} &bull; ${authLabel}
+                            </span>
+                        </div>
+                        <div class="meta-row">
+                            <span class="meta-key">App State</span>
+                            <span class="meta-val">
+                                ${isDown
+                                    ? `<span style="color:#ef4444; font-weight:600;">🔴 Down (Maintenance)</span>`
+                                    : (p.app_status === 'up'
+                                        ? `<span style="color:#10b981; font-weight:600;">🟢 Up (Live)</span>`
+                                        : `<span style="color:var(--text-muted);">Unknown / Untracked</span>`)
+                                }
+                                ${p.app_status_updated_at ? `<span style="color:var(--text-muted); font-size:11px;"> &bull; since ${App.escapeHtml(p.app_status_updated_at)}</span>` : ''}
                             </span>
                         </div>
                         <div class="meta-row">
@@ -453,6 +513,21 @@
                     return;
                 }
 
+                const isProd = project.environment === 'production';
+                const confirmed = await App.confirmAction({
+                    title: 'Run Deployment Pipeline?',
+                    subtitle: project.name,
+                    message: `You are about to execute all <strong>${project.enabled_command_count} active command(s)</strong> on remote host <strong>${App.escapeHtml(project.ssh_username)}@${App.escapeHtml(project.ssh_host)}</strong> in directory <code>${App.escapeHtml(project.remote_path || '~')}</code>.`,
+                    warning: isProd
+                        ? 'Caution: This targets your PRODUCTION environment. Live traffic and database changes may take effect.'
+                        : null,
+                    confirmText: 'Run All Commands',
+                    confirmClass: 'btn-deploy',
+                    icon: '▶',
+                    iconVariant: 'deploy',
+                });
+                if (!confirmed) return;
+
                 btn.disabled = true;
                 const origHtml = btn.innerHTML;
                 btn.innerHTML = '<span>&#9203;</span><span>Running...</span>';
@@ -483,6 +558,32 @@
                 } finally {
                     await refreshAll();
                 }
+            } else if (action === 'toggle-state') {
+                const targetState = btn.dataset.targetState || (project.app_status === 'down' ? 'up' : 'down');
+                const actionLabel = targetState === 'down' ? 'DOWN (Maintenance Mode)' : 'UP (Live)';
+                const confirmed = await App.confirmAction({
+                    title: `Mark App as ${targetState.toUpperCase()}?`,
+                    subtitle: project.name,
+                    message: `Change application status flag to <strong>${actionLabel}</strong>?`,
+                    warning: targetState === 'down'
+                        ? 'This highlights the project card as DOWN across the dashboard.'
+                        : 'This clears the DOWN alert and marks the project as live.',
+                    confirmText: `Set as ${targetState.toUpperCase()}`,
+                    confirmClass: targetState === 'down' ? 'btn-danger' : 'btn-success',
+                    icon: targetState === 'down' ? '🔴' : '🟢',
+                    iconVariant: targetState === 'down' ? 'danger' : 'success',
+                });
+                if (!confirmed) return;
+
+                btn.disabled = true;
+                try {
+                    await App.apiPost('set_app_state', { project_id: id, app_state: targetState });
+                    App.toast(`Project "${project.name}" marked as ${targetState.toUpperCase()}.`, 'success');
+                    await refreshAll();
+                } catch (err) {
+                    App.toast('Failed to change app state: ' + err.message, 'error');
+                    btn.disabled = false;
+                }
             } else if (action === 'edit') {
                 App.openProjectModal(project, async () => refreshAll(), false);
             } else if (action === 'duplicate') {
@@ -509,9 +610,18 @@
                     btn.textContent = orig;
                 }
             } else if (action === 'delete') {
-                if (!window.confirm(`Delete project "${project.name}" and its saved SSH configuration?`)) {
-                    return;
-                }
+                const confirmed = await App.confirmAction({
+                    title: 'Delete Project?',
+                    subtitle: project.name,
+                    message: `Are you sure you want to permanently delete <strong>${App.escapeHtml(project.name)}</strong> and all its command definitions, deployment logs, and saved SSH credentials?`,
+                    warning: 'This action cannot be undone.',
+                    confirmText: 'Delete Project',
+                    confirmClass: 'btn-danger',
+                    icon: '🗑',
+                    iconVariant: 'danger',
+                });
+                if (!confirmed) return;
+
                 btn.disabled = true;
                 try {
                     await App.apiPost('delete_project', { id });

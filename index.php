@@ -31,6 +31,10 @@ require __DIR__ . '/src/Views/header.php';
                     <span class="stat-value indigo" id="statTotalProjects"><?= (int) $initialStats['total_projects'] ?></span>
                 </div>
                 <div class="stat-card">
+                    <span class="stat-label">Apps Down</span>
+                    <span class="stat-value rose" id="statDownProjects"><?= (int) ($initialStats['down_projects'] ?? 0) ?></span>
+                </div>
+                <div class="stat-card">
                     <span class="stat-label">Total Deployments</span>
                     <span class="stat-value" id="statTotalDeploys"><?= (int) $initialStats['total_deployments'] ?></span>
                 </div>
@@ -52,6 +56,7 @@ require __DIR__ . '/src/Views/header.php';
                         <button type="button" class="filter-pill" data-env="production">Production</button>
                         <button type="button" class="filter-pill" data-env="staging">Staging</button>
                         <button type="button" class="filter-pill" data-env="development">Development</button>
+                        <button type="button" class="filter-pill filter-pill-down <?= (($initialStats['down_projects'] ?? 0) > 0) ? 'has-down' : '' ?>" data-env="app-down">🔴 Down (<span id="downFilterCount"><?= (int) ($initialStats['down_projects'] ?? 0) ?></span>)</button>
                     </div>
                 </div>
                 <div class="toolbar-right">
@@ -92,7 +97,7 @@ require __DIR__ . '/src/Views/header.php';
         'events'   => $recentEvents['items'],
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
 </script>
-<script src="assets/js/common.js?v=1.2.0"></script>
-<script src="assets/js/dashboard.js?v=1.2.0"></script>
+<script src="assets/js/common.js?v=1.3.0"></script>
+<script src="assets/js/dashboard.js?v=1.3.0"></script>
 </body>
 </html>

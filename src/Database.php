@@ -52,20 +52,23 @@ final class Database
             }
         }
 
-        $markerFile = rtrim($storageDir, '/\\') . '/.schema_v3.ready';
+        $markerFile = rtrim($storageDir, '/\\') . '/.schema_v4.ready';
         if ($needsMigration || !is_file($markerFile)) {
             $this->migrate();
             @file_put_contents($markerFile, date('c'));
         } else {
             // Quick sanity check in case tables or columns were altered manually via phpMyAdmin
             $stmt = $this->pdo->query("SHOW TABLES LIKE 'event_logs'");
-            $colStmt = $this->pdo->query("SHOW COLUMNS FROM `projects` LIKE 'sort_order'");
+            $colStmt = $this->pdo->query("SHOW COLUMNS FROM `projects` LIKE 'app_status'");
+            $cmdColStmt = $this->pdo->query("SHOW COLUMNS FROM `project_commands` LIKE 'app_state_trigger'");
             $authStmt = $this->pdo->query("SHOW TABLES LIKE 'auth_state'");
             if (
                 $stmt === false
                 || $stmt->fetchColumn() === false
                 || $colStmt === false
                 || $colStmt->fetch() === false
+                || $cmdColStmt === false
+                || $cmdColStmt->fetch() === false
                 || $authStmt === false
                 || $authStmt->fetchColumn() === false
             ) {
@@ -104,11 +107,14 @@ final class Database
                 `last_deploy_status` VARCHAR(30) NOT NULL DEFAULT 'never',
                 `last_deployed_at` DATETIME NULL,
                 `last_deploy_duration_ms` INT UNSIGNED NULL,
+                `app_status` VARCHAR(20) NOT NULL DEFAULT 'unknown',
+                `app_status_updated_at` DATETIME NULL,
                 `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 PRIMARY KEY (`id`),
                 KEY `idx_environment` (`environment`),
                 KEY `idx_sort_order` (`sort_order`, `id`),
+                KEY `idx_app_status` (`app_status`),
                 KEY `idx_updated_at` (`updated_at`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         SQL);
@@ -127,6 +133,14 @@ final class Database
             }
         }
 
+        // Non-destructive upgrade for existing installations without `projects.app_status`
+        $appStatusCol = $this->pdo->query("SHOW COLUMNS FROM `projects` LIKE 'app_status'");
+        if ($appStatusCol === false || $appStatusCol->fetch() === false) {
+            $this->pdo->exec(
+                "ALTER TABLE `projects` ADD COLUMN `app_status` VARCHAR(20) NOT NULL DEFAULT 'unknown' AFTER `last_deploy_duration_ms`, ADD COLUMN `app_status_updated_at` DATETIME NULL AFTER `app_status`, ADD KEY `idx_app_status` (`app_status`)"
+            );
+        }
+
         $this->pdo->exec(<<<'SQL'
             CREATE TABLE IF NOT EXISTS `project_commands` (
                 `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -136,6 +150,7 @@ final class Database
                 `sort_order` INT NOT NULL DEFAULT 0,
                 `is_enabled` TINYINT(1) NOT NULL DEFAULT 1,
                 `stop_on_error` TINYINT(1) NOT NULL DEFAULT 1,
+                `app_state_trigger` VARCHAR(20) NOT NULL DEFAULT 'none',
                 `last_exit_code` INT NULL,
                 `last_run_at` DATETIME NULL,
                 `last_duration_ms` INT UNSIGNED NULL,
@@ -143,11 +158,27 @@ final class Database
                 `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 PRIMARY KEY (`id`),
                 KEY `idx_project_sort` (`project_id`, `sort_order`, `id`),
+                KEY `idx_app_state_trigger` (`project_id`, `app_state_trigger`),
                 CONSTRAINT `fk_commands_project`
                     FOREIGN KEY (`project_id`) REFERENCES `projects` (`id`)
                     ON DELETE CASCADE
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         SQL);
+
+        // Non-destructive upgrade for existing installations without `project_commands.app_state_trigger`
+        $appTriggerCol = $this->pdo->query("SHOW COLUMNS FROM `project_commands` LIKE 'app_state_trigger'");
+        if ($appTriggerCol === false || $appTriggerCol->fetch() === false) {
+            $this->pdo->exec(
+                "ALTER TABLE `project_commands` ADD COLUMN `app_state_trigger` VARCHAR(20) NOT NULL DEFAULT 'none' AFTER `stop_on_error`, ADD KEY `idx_app_state_trigger` (`project_id`, `app_state_trigger`)"
+            );
+            // Auto-detect existing commands for Laravel / Docker maintenance triggers
+            $this->pdo->exec(
+                "UPDATE `project_commands` SET `app_state_trigger` = 'down' WHERE `app_state_trigger` = 'none' AND (`command` LIKE '%artisan down%' OR `command` LIKE '%compose down%' OR `command` LIKE '%compose stop%')"
+            );
+            $this->pdo->exec(
+                "UPDATE `project_commands` SET `app_state_trigger` = 'up' WHERE `app_state_trigger` = 'none' AND (`command` LIKE '%artisan up%' OR `command` LIKE '%compose up%' OR `command` LIKE '%compose start%')"
+            );
+        }
 
         $this->pdo->exec(<<<'SQL'
             CREATE TABLE IF NOT EXISTS `event_logs` (

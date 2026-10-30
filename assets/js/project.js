@@ -41,6 +41,7 @@
             command: c.command || '',
             is_enabled: c.is_enabled !== undefined ? Boolean(c.is_enabled) : true,
             stop_on_error: c.stop_on_error !== undefined ? Boolean(c.stop_on_error) : true,
+            app_state_trigger: c.app_state_trigger || 'none',
             last_exit_code: c.last_exit_code ?? null,
             last_duration_ms: c.last_duration_ms ?? null,
             last_run_at: c.last_run_at ?? null
@@ -71,6 +72,24 @@
         envBadge.textContent = project.environment;
 
         document.getElementById('heroStatusBadge').innerHTML = App.statusBadgeHtml(project.last_deploy_status);
+
+        const appStateBadgeEl = document.getElementById('heroAppStateBadge');
+        const toggleStateBtn = document.getElementById('toggleAppStateBtn');
+        if (appStateBadgeEl) {
+            const st = project.app_status || 'unknown';
+            if (st === 'down') {
+                appStateBadgeEl.innerHTML = `<span class="app-status-badge state-down"><span class="down-warning-dot" aria-hidden="true"></span> App is DOWN (Maintenance)</span>`;
+            } else if (st === 'up') {
+                appStateBadgeEl.innerHTML = `<span class="app-status-badge state-up">&#9679; App is UP (Live)</span>`;
+            } else {
+                appStateBadgeEl.innerHTML = `<span class="app-status-badge state-unknown">&#9675; App State Unknown</span>`;
+            }
+        }
+        if (toggleStateBtn) {
+            const isDown = (project.app_status === 'down');
+            toggleStateBtn.textContent = isDown ? 'Mark as UP 🟢' : 'Mark as DOWN 🔴';
+            toggleStateBtn.title = isDown ? 'Manually mark app as live/UP' : 'Manually mark app as DOWN/maintenance';
+        }
 
         const vaultChip = project.ssh_auth_type === 'key'
             ? (project.has_private_key ? '&#128273; SSH Key Encrypted (AES-256-GCM)' : '&#9888; No SSH Key Stored')
@@ -154,6 +173,17 @@
                                 <input type="checkbox" data-field="stop_on_error" data-index="${idx}" ${cmd.stop_on_error ? 'checked' : ''}>
                                 <span>Stop on error</span>
                             </label>
+                            <div class="step-lifecycle-trigger">
+                                <span style="font-size:11px; color:var(--text-muted); margin-right:2px;">App State:</span>
+                                <label class="lifecycle-label label-down ${cmd.app_state_trigger === 'down' ? 'active' : ''}" title="Mark project as DOWN (maintenance mode) when this step succeeds">
+                                    <input type="checkbox" data-field="app_state_down" data-index="${idx}" ${cmd.app_state_trigger === 'down' ? 'checked' : ''}>
+                                    <span>🔴 Sets Down</span>
+                                </label>
+                                <label class="lifecycle-label label-up ${cmd.app_state_trigger === 'up' ? 'active' : ''}" title="Mark project as UP (live) when this step succeeds">
+                                    <input type="checkbox" data-field="app_state_up" data-index="${idx}" ${cmd.app_state_trigger === 'up' ? 'checked' : ''}>
+                                    <span>🟢 Sets Up</span>
+                                </label>
+                            </div>
                         </div>
                         <div class="step-actions">
                             ${lastRunHtml}
@@ -339,6 +369,10 @@
                             activeStepStates[targetIdx] = pkt.exit_code === 0 ? 'success' : 'failed';
                             renderCommands();
                         }
+                        if (pkt.app_status && project) {
+                            project.app_status = pkt.app_status;
+                            renderHero();
+                        }
                         break;
                     }
 
@@ -425,9 +459,73 @@
         renderEvents();
 
         // Top Hero Buttons
-        document.getElementById('deployAllBtn').addEventListener('click', () => {
+        document.getElementById('deployAllBtn').addEventListener('click', async () => {
+            if (isExecuting) return;
+            const enabledCount = commands.filter((c) => c.is_enabled).length;
+            if (enabledCount === 0) {
+                App.toast('Enable or add at least one command before deploying.', 'warning');
+                return;
+            }
+
+            const isProd = project.environment === 'production';
+            const confirmed = await App.confirmAction({
+                title: 'Deploy Now (Execute All)?',
+                subtitle: project.name,
+                message: `You are about to run all <strong>${enabledCount} active command(s)</strong> sequentially on remote host <strong>${App.escapeHtml(project.ssh_username)}@${App.escapeHtml(project.ssh_host)}</strong> in directory <code>${App.escapeHtml(project.remote_path || '~')}</code>.`,
+                warning: isProd
+                    ? 'Warning: This will execute on your LIVE PRODUCTION environment. Service interruptions or database alterations may affect live users.'
+                    : null,
+                confirmText: 'Execute Deployment',
+                confirmClass: 'btn-deploy',
+                icon: '▶',
+                iconVariant: 'deploy',
+            });
+            if (!confirmed) return;
+
             runExecution('deploy_all');
         });
+
+        const toggleStateBtn = document.getElementById('toggleAppStateBtn');
+        if (toggleStateBtn) {
+            toggleStateBtn.addEventListener('click', async () => {
+                if (isExecuting) return;
+                const targetState = (project.app_status === 'down') ? 'up' : 'down';
+                const actionLabel = targetState === 'down' ? 'DOWN (Maintenance Mode)' : 'UP (Live)';
+
+                const confirmed = await App.confirmAction({
+                    title: `Mark App as ${targetState.toUpperCase()}?`,
+                    subtitle: project.name,
+                    message: `Change project app status flag to <strong>${actionLabel}</strong>?`,
+                    warning: targetState === 'down'
+                        ? 'This marks the project card as DOWN across the dashboard to alert team members.'
+                        : 'This clears the DOWN alert and marks the project as live.',
+                    confirmText: `Set as ${targetState.toUpperCase()}`,
+                    confirmClass: targetState === 'down' ? 'btn-danger' : 'btn-success',
+                    icon: targetState === 'down' ? '🔴' : '🟢',
+                    iconVariant: targetState === 'down' ? 'danger' : 'success',
+                });
+                if (!confirmed) return;
+
+                toggleStateBtn.disabled = true;
+                try {
+                    const res = await App.apiPost('set_app_state', {
+                        project_id: project.id,
+                        app_state: targetState
+                    });
+                    if (res.project) {
+                        project = res.project;
+                        syncAvailableProjectsState(project);
+                        renderHero();
+                    }
+                    App.toast(`App status updated to ${targetState.toUpperCase()}.`, 'success');
+                    await loadEvents();
+                } catch (err) {
+                    App.toast('Failed to update app status: ' + err.message, 'error');
+                } finally {
+                    toggleStateBtn.disabled = false;
+                }
+            });
+        }
 
         const duplicateHeroBtn = document.getElementById('duplicateHeroBtn');
         if (duplicateHeroBtn) {
@@ -510,6 +608,30 @@
                 commands[idx][field] = target.value;
                 activeStepStates = {};
                 setDirty(true);
+
+                if (field === 'command') {
+                    const val = target.value.toLowerCase();
+                    const card = target.closest('.command-step');
+                    if (card && commands[idx].app_state_trigger === 'none') {
+                        const downBox = card.querySelector('input[data-field="app_state_down"]');
+                        const upBox = card.querySelector('input[data-field="app_state_up"]');
+                        const downLabel = card.querySelector('.label-down');
+                        const upLabel = card.querySelector('.label-up');
+                        if (val.includes('artisan down') || val.includes('compose down')) {
+                            commands[idx].app_state_trigger = 'down';
+                            if (downBox) downBox.checked = true;
+                            if (downLabel) downLabel.classList.add('active');
+                            if (upBox) upBox.checked = false;
+                            if (upLabel) upLabel.classList.remove('active');
+                        } else if (val.includes('artisan up') || val.includes('compose up')) {
+                            commands[idx].app_state_trigger = 'up';
+                            if (upBox) upBox.checked = true;
+                            if (upLabel) upLabel.classList.add('active');
+                            if (downBox) downBox.checked = false;
+                            if (downLabel) downLabel.classList.remove('active');
+                        }
+                    }
+                }
             }
         });
 
@@ -518,6 +640,17 @@
             const idx = Number(target.dataset.index);
             const field = target.dataset.field;
             if (Number.isNaN(idx) || !commands[idx] || !field) return;
+
+            if (field === 'app_state_down' || field === 'app_state_up') {
+                if (target.checked) {
+                    commands[idx].app_state_trigger = (field === 'app_state_down') ? 'down' : 'up';
+                } else {
+                    commands[idx].app_state_trigger = 'none';
+                }
+                setDirty(true);
+                renderCommands();
+                return;
+            }
 
             if (field === 'is_enabled' || field === 'stop_on_error') {
                 commands[idx][field] = target.checked;
@@ -535,7 +668,7 @@
             }
         });
 
-        commandsListEl.addEventListener('click', (e) => {
+        commandsListEl.addEventListener('click', async (e) => {
             const btn = e.target.closest('button[data-cmd-action]');
             if (!btn || isExecuting) return;
 
@@ -558,11 +691,42 @@
                 setDirty(true);
                 renderCommands();
             } else if (action === 'delete') {
+                const cmd = commands[idx];
+                if (cmd.command && cmd.command.trim()) {
+                    const confirmed = await App.confirmAction({
+                        title: `Delete Step #${idx + 1}?`,
+                        subtitle: cmd.name || 'Unnamed Step',
+                        message: `Remove this command step from the deployment pipeline?`,
+                        codeSnippet: cmd.command,
+                        confirmText: 'Delete Step',
+                        confirmClass: 'btn-danger',
+                        icon: '🗑',
+                        iconVariant: 'danger',
+                    });
+                    if (!confirmed) return;
+                }
                 commands.splice(idx, 1);
                 activeStepStates = {};
                 setDirty(true);
                 renderCommands();
             } else if (action === 'run') {
+                const cmd = commands[idx];
+                const cmdName = cmd.name || `Step #${idx + 1}`;
+                const confirmed = await App.confirmAction({
+                    title: `Run Step #${idx + 1}?`,
+                    subtitle: project.name + ' • ' + cmdName,
+                    message: `Execute single command on <strong>${App.escapeHtml(project.ssh_username)}@${App.escapeHtml(project.ssh_host)}</strong>:`,
+                    codeSnippet: cmd.command,
+                    warning: project.environment === 'production'
+                        ? 'Caution: Executing directly on PRODUCTION environment.'
+                        : null,
+                    confirmText: 'Run Step',
+                    confirmClass: 'btn-primary',
+                    icon: '▶',
+                    iconVariant: 'info',
+                });
+                if (!confirmed) return;
+
                 runExecution('single_command', idx);
             }
         });
@@ -575,6 +739,7 @@
                 command: '',
                 is_enabled: true,
                 stop_on_error: true,
+                app_state_trigger: 'none',
                 last_exit_code: null,
                 last_duration_ms: null,
                 last_run_at: null
@@ -591,12 +756,14 @@
         document.getElementById('presetBar').addEventListener('click', (e) => {
             const chip = e.target.closest('.preset-chip');
             if (!chip || isExecuting) return;
+            const trigger = chip.dataset.trigger || 'none';
             commands.push({
                 id: null,
                 name: chip.dataset.name || 'Command step',
                 command: chip.dataset.cmd || '',
                 is_enabled: true,
                 stop_on_error: true,
+                app_state_trigger: trigger,
                 last_exit_code: null,
                 last_duration_ms: null,
                 last_run_at: null
@@ -620,12 +787,28 @@
         });
 
         // Quick Ad-hoc Command Runner
-        document.getElementById('adhocForm').addEventListener('submit', (e) => {
+        document.getElementById('adhocForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             if (isExecuting) return;
             const input = document.getElementById('adhocCommandInput');
             const cmd = input.value.trim();
             if (!cmd) return;
+
+            const confirmed = await App.confirmAction({
+                title: 'Run Quick Command?',
+                subtitle: project.name,
+                message: `Execute one-off command on remote host <strong>${App.escapeHtml(project.ssh_username)}@${App.escapeHtml(project.ssh_host)}</strong>:`,
+                codeSnippet: cmd,
+                warning: project.environment === 'production'
+                    ? 'Caution: Running on PRODUCTION environment.'
+                    : null,
+                confirmText: 'Run Once',
+                confirmClass: 'btn-primary',
+                icon: '⚡',
+                iconVariant: 'warning',
+            });
+            if (!confirmed) return;
+
             runExecution('adhoc_command', null, cmd);
         });
 
@@ -668,7 +851,18 @@
         document.getElementById('refreshEventsBtn').addEventListener('click', loadEvents);
 
         document.getElementById('clearEventsBtn').addEventListener('click', async () => {
-            if (!window.confirm('Clear historical event logs for this project?')) return;
+            const confirmed = await App.confirmAction({
+                title: 'Clear Historical Event Logs?',
+                subtitle: project.name,
+                message: `Are you sure you want to clear all historical deployment and audit event logs for <strong>${App.escapeHtml(project.name)}</strong>?`,
+                warning: 'Past logs and console output records cannot be recovered.',
+                confirmText: 'Clear Logs',
+                confirmClass: 'btn-danger',
+                icon: '🗑',
+                iconVariant: 'danger',
+            });
+            if (!confirmed) return;
+
             try {
                 const res = await App.apiPost('clear_events', { project_id: project.id });
                 App.toast(`Cleared ${res.deleted} event log entries.`, 'info');

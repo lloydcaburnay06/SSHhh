@@ -44,6 +44,10 @@ require __DIR__ . '/src/Views/header.php';
                         </span>
                         <span id="heroStatusBadge"></span>
                     </h1>
+                    <div class="hero-app-state-wrap" style="margin-top:6px; margin-bottom:8px;">
+                        <span id="heroAppStateBadge"></span>
+                        <button type="button" class="btn btn-ghost btn-xs" id="toggleAppStateBtn" title="Manually toggle app state">Toggle State</button>
+                    </div>
                     <div class="hero-chips" id="heroChips"></div>
                 </div>
                 <div class="hero-actions">
@@ -82,6 +86,8 @@ require __DIR__ . '/src/Views/header.php';
 
                     <div class="preset-bar" id="presetBar">
                         <span class="preset-label">Quick add step:</span>
+                        <button type="button" class="preset-chip preset-chip-down" data-name="Enable maintenance mode" data-cmd="php artisan down || true" data-trigger="down">+ artisan down</button>
+                        <button type="button" class="preset-chip preset-chip-up" data-name="Bring application live" data-cmd="php artisan up" data-trigger="up">+ artisan up</button>
                         <button type="button" class="preset-chip" data-name="Pull latest code" data-cmd="git pull origin $DEPLOY_BRANCH">+ git pull</button>
                         <button type="button" class="preset-chip" data-name="Check Git status" data-cmd="git status -sb">+ git status</button>
                         <button type="button" class="preset-chip" data-name="Install Composer dependencies" data-cmd="composer install --no-interaction --prefer-dist --optimize-autoloader --no-dev">+ composer install</button>
@@ -167,7 +173,7 @@ require __DIR__ . '/src/Views/header.php';
         'events'       => $eventsData,
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
 </script>
-<script src="assets/js/common.js?v=1.2.0"></script>
-<script src="assets/js/project.js?v=1.2.0"></script>
+<script src="assets/js/common.js?v=1.3.0"></script>
+<script src="assets/js/project.js?v=1.3.0"></script>
 </body>
 </html>

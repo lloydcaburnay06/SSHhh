@@ -211,10 +211,11 @@ final class SshRunner
                 throw new InvalidArgumentException('Deployment command not found.');
             }
             $stepsToRun[] = [
-                'id'            => (int) $cmd['id'],
-                'name'          => (string) $cmd['name'],
-                'command'       => (string) $cmd['command'],
-                'stop_on_error' => true,
+                'id'                => (int) $cmd['id'],
+                'name'              => (string) $cmd['name'],
+                'command'           => (string) $cmd['command'],
+                'stop_on_error'     => true,
+                'app_state_trigger' => (string) ($cmd['app_state_trigger'] ?? 'none'),
             ];
             $category = 'command';
             $eventType = 'single_command';
@@ -227,10 +228,11 @@ final class SshRunner
             }
             $firstLine = mb_substr(trim(explode("\n", $cleanAdhoc)[0]), 0, 80);
             $stepsToRun[] = [
-                'id'            => null,
-                'name'          => 'Quick Command: ' . $firstLine,
-                'command'       => $cleanAdhoc,
-                'stop_on_error' => true,
+                'id'                => null,
+                'name'              => 'Quick Command: ' . $firstLine,
+                'command'           => $cleanAdhoc,
+                'stop_on_error'     => true,
+                'app_state_trigger' => 'none',
             ];
             $category = 'command';
             $eventType = 'adhoc_command';
@@ -242,10 +244,11 @@ final class SshRunner
             foreach ($allCommands as $cmd) {
                 if (!empty($cmd['is_enabled'])) {
                     $stepsToRun[] = [
-                        'id'            => (int) $cmd['id'],
-                        'name'          => (string) $cmd['name'],
-                        'command'       => (string) $cmd['command'],
-                        'stop_on_error' => (bool) $cmd['stop_on_error'],
+                        'id'                => (int) $cmd['id'],
+                        'name'              => (string) $cmd['name'],
+                        'command'           => (string) $cmd['command'],
+                        'stop_on_error'     => (bool) $cmd['stop_on_error'],
+                        'app_state_trigger' => (string) ($cmd['app_state_trigger'] ?? 'none'),
                     ];
                 }
             }
@@ -403,6 +406,13 @@ final class SshRunner
                 $stepSucceeded = ($exitCode === 0);
                 $stepStatus = $stepSucceeded ? 'success' : ($step['stop_on_error'] ? 'failed' : 'warning');
 
+                if ($stepSucceeded && !empty($step['app_state_trigger']) && in_array($step['app_state_trigger'], ['down', 'up'], true)) {
+                    $this->projects->updateProjectAppState($projectId, $step['app_state_trigger']);
+                }
+
+                $currentProject = $this->projects->find($projectId);
+                $currentAppStatus = $currentProject['app_status'] ?? 'unknown';
+
                 $stepFooter = sprintf(
                     "[%s] -> Exit code %d (%s)",
                     date('H:i:s'),
@@ -430,6 +440,7 @@ final class SshRunner
                     'status'      => $stepStatus,
                     'exit_code'   => $exitCode,
                     'duration_ms' => $stepDurationMs,
+                    'app_status'  => $currentAppStatus,
                     'message'     => $stepFooter,
                 ]);
 
