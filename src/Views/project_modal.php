@@ -1,9 +1,29 @@
 <div class="modal-backdrop" id="projectModal" aria-hidden="true">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="projectModalTitle">
+    <div class="modal" id="projectModalDialog" role="dialog" aria-modal="true" aria-labelledby="projectModalTitle">
         <div class="modal-header">
-            <h2 id="projectModalTitle">Add New Project</h2>
+            <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; min-width:0;">
+                <h2 id="projectModalTitle">Add New Project</h2>
+                <span class="dirty-badge unsaved" id="modalDirtyBadge" style="display:none;">Unsaved</span>
+            </div>
             <button type="button" class="icon-btn" id="closeProjectModalBtn" title="Close">&times;</button>
         </div>
+
+        <div class="modal-draft-notice" id="modalDraftNotice" style="display:none;">
+            <span>&#128190; Restored your unsaved inputs.</span>
+            <button type="button" class="btn btn-ghost btn-sm" id="resetModalDraftBtn">Reset Inputs</button>
+        </div>
+
+        <div class="modal-unsaved-guard" id="modalUnsavedGuard" style="display:none;" role="alert">
+            <div class="guard-text">
+                <strong>You have unsaved changes.</strong> Prevented accidental close—choose an action:
+            </div>
+            <div class="guard-actions">
+                <button type="button" class="btn btn-primary btn-sm" id="modalKeepEditingBtn">Keep Editing</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="modalKeepDraftCloseBtn">Close &amp; Keep Inputs</button>
+                <button type="button" class="btn btn-danger btn-sm" id="modalDiscardCloseBtn">Discard &amp; Close</button>
+            </div>
+        </div>
+
         <form id="projectForm" autocomplete="off">
             <input type="hidden" id="proj_id" name="id" value="">
             <div class="modal-body">
@@ -118,4 +138,3 @@
     </div>
 </div>
 <div class="toast-stack" id="toastStack"></div>
-

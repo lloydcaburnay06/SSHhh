@@ -272,11 +272,13 @@
 
     // Shared Project & SSH Modal Controller
     let modalSaveCallback = null;
+    const modalDrafts = new Map(); // contextKey ('new' | 'edit:<id>') -> raw field map
 
     function initProjectModal() {
         const modal = document.getElementById('projectModal');
         if (!modal) return;
 
+        const dialog = document.getElementById('projectModalDialog');
         const form = document.getElementById('projectForm');
         const authSelect = document.getElementById('proj_ssh_auth_type');
         const pwFields = document.getElementById('passwordAuthFields');
@@ -286,13 +288,106 @@
         const testBtn = document.getElementById('modalTestSshBtn');
         const testBanner = document.getElementById('modalSshTestBanner');
 
+        const dirtyBadge = document.getElementById('modalDirtyBadge');
+        const draftNotice = document.getElementById('modalDraftNotice');
+        const resetDraftBtn = document.getElementById('resetModalDraftBtn');
+        const unsavedGuard = document.getElementById('modalUnsavedGuard');
+        const keepEditingBtn = document.getElementById('modalKeepEditingBtn');
+        const keepDraftCloseBtn = document.getElementById('modalKeepDraftCloseBtn');
+        const discardCloseBtn = document.getElementById('modalDiscardCloseBtn');
+
+        let currentContextKey = 'new';
+        let currentSourceProject = null;
+        let baselineSnapshot = '';
+
+        function nudgeModal() {
+            if (!dialog) return;
+            dialog.classList.remove('modal-locked-nudge');
+            void dialog.offsetWidth; // trigger reflow
+            dialog.classList.add('modal-locked-nudge');
+            setTimeout(() => dialog.classList.remove('modal-locked-nudge'), 260);
+        }
+
         function syncAuthVisibility() {
             const isKey = authSelect.value === 'key';
             pwFields.style.display = isKey ? 'none' : '';
             keyFields.style.display = isKey ? '' : 'none';
         }
 
-        authSelect.addEventListener('change', syncAuthVisibility);
+        function collectRawFields() {
+            return {
+                id: document.getElementById('proj_id').value,
+                name: document.getElementById('proj_name').value,
+                environment: document.getElementById('proj_environment').value,
+                remote_path: document.getElementById('proj_remote_path').value,
+                repo_branch: document.getElementById('proj_branch').value,
+                preset: document.getElementById('proj_preset').value,
+                description: document.getElementById('proj_description').value,
+                ssh_host: document.getElementById('proj_ssh_host').value,
+                ssh_port: document.getElementById('proj_ssh_port').value,
+                ssh_username: document.getElementById('proj_ssh_username').value,
+                ssh_auth_type: authSelect.value,
+                command_timeout: document.getElementById('proj_command_timeout').value,
+                ssh_password: pwInput.value,
+                ssh_private_key: document.getElementById('proj_ssh_private_key').value,
+                ssh_passphrase: document.getElementById('proj_ssh_passphrase').value
+            };
+        }
+
+        function applyRawFields(fields) {
+            document.getElementById('proj_id').value = fields.id ?? '';
+            document.getElementById('proj_name').value = fields.name ?? '';
+            document.getElementById('proj_environment').value = fields.environment || 'production';
+            document.getElementById('proj_remote_path').value = fields.remote_path ?? '';
+            document.getElementById('proj_branch').value = fields.repo_branch ?? 'main';
+            document.getElementById('proj_preset').value = fields.preset || 'git_basic';
+            document.getElementById('proj_description').value = fields.description ?? '';
+            document.getElementById('proj_ssh_host').value = fields.ssh_host ?? '';
+            document.getElementById('proj_ssh_port').value = fields.ssh_port ?? 22;
+            document.getElementById('proj_ssh_username').value = fields.ssh_username ?? '';
+            authSelect.value = fields.ssh_auth_type || 'password';
+            document.getElementById('proj_command_timeout').value = fields.command_timeout ?? 300;
+            pwInput.value = fields.ssh_password ?? '';
+            document.getElementById('proj_ssh_private_key').value = fields.ssh_private_key ?? '';
+            document.getElementById('proj_ssh_passphrase').value = fields.ssh_passphrase ?? '';
+            syncAuthVisibility();
+        }
+
+        function serializeCurrentState() {
+            return JSON.stringify(collectRawFields());
+        }
+
+        function isModalDirty() {
+            return baselineSnapshot !== '' && serializeCurrentState() !== baselineSnapshot;
+        }
+
+        function syncDirtyIndicators() {
+            const dirty = isModalDirty();
+            if (dirtyBadge) {
+                dirtyBadge.style.display = dirty ? 'inline-flex' : 'none';
+            }
+            if (dirty) {
+                modalDrafts.set(currentContextKey, collectRawFields());
+            } else {
+                modalDrafts.delete(currentContextKey);
+                if (draftNotice) draftNotice.style.display = 'none';
+                if (unsavedGuard) unsavedGuard.style.display = 'none';
+            }
+        }
+
+        authSelect.addEventListener('change', () => {
+            syncAuthVisibility();
+            syncDirtyIndicators();
+        });
+
+        form.addEventListener('input', () => {
+            if (unsavedGuard && unsavedGuard.style.display !== 'none') {
+                unsavedGuard.style.display = 'none';
+            }
+            syncDirtyIndicators();
+        });
+
+        form.addEventListener('change', syncDirtyIndicators);
 
         togglePwBtn.addEventListener('click', () => {
             const isHidden = pwInput.type === 'password';
@@ -300,17 +395,89 @@
             togglePwBtn.textContent = isHidden ? 'Hide' : 'Show';
         });
 
-        function closeModal() {
+        function hideModalDom() {
             modal.classList.remove('open');
             modal.setAttribute('aria-hidden', 'true');
             pwInput.type = 'password';
             togglePwBtn.textContent = 'Show';
+            if (unsavedGuard) unsavedGuard.style.display = 'none';
         }
 
-        document.getElementById('closeProjectModalBtn').addEventListener('click', closeModal);
-        document.getElementById('cancelProjectModalBtn').addEventListener('click', closeModal);
-        modal.addEventListener('click', (e) => {
-            if (e.target === modal) closeModal();
+        function requestCloseModal() {
+            if (!isModalDirty()) {
+                modalDrafts.delete(currentContextKey);
+                hideModalDom();
+                return;
+            }
+
+            // Prevent immediate close when unsaved; surface inline choice bar
+            if (unsavedGuard) {
+                unsavedGuard.style.display = 'flex';
+            }
+            nudgeModal();
+            if (keepEditingBtn) {
+                keepEditingBtn.focus();
+            }
+        }
+
+        // Only close via explicit X button or Cancel button
+        document.getElementById('closeProjectModalBtn').addEventListener('click', requestCloseModal);
+        document.getElementById('cancelProjectModalBtn').addEventListener('click', requestCloseModal);
+
+        // Backdrop clicks never close the modal
+        modal.addEventListener('mousedown', (e) => {
+            if (e.target === modal) {
+                nudgeModal();
+            }
+        });
+
+        // Escape key never closes the modal unexpectedly
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && modal.classList.contains('open')) {
+                e.preventDefault();
+                nudgeModal();
+            }
+        });
+
+        if (keepEditingBtn) {
+            keepEditingBtn.addEventListener('click', () => {
+                unsavedGuard.style.display = 'none';
+            });
+        }
+
+        if (keepDraftCloseBtn) {
+            keepDraftCloseBtn.addEventListener('click', () => {
+                modalDrafts.set(currentContextKey, collectRawFields());
+                hideModalDom();
+                toast('Closed — your unsaved inputs are preserved for when you reopen.', 'info');
+            });
+        }
+
+        if (discardCloseBtn) {
+            discardCloseBtn.addEventListener('click', () => {
+                modalDrafts.delete(currentContextKey);
+                populateCleanBaseline(currentSourceProject);
+                syncDirtyIndicators();
+                hideModalDom();
+            });
+        }
+
+        if (resetDraftBtn) {
+            resetDraftBtn.addEventListener('click', () => {
+                modalDrafts.delete(currentContextKey);
+                populateCleanBaseline(currentSourceProject);
+                baselineSnapshot = serializeCurrentState();
+                if (draftNotice) draftNotice.style.display = 'none';
+                syncDirtyIndicators();
+                toast('Form reset to saved defaults.', 'info');
+            });
+        }
+
+        window.addEventListener('beforeunload', (e) => {
+            if ((modal.classList.contains('open') && isModalDirty()) || modalDrafts.size > 0) {
+                e.preventDefault();
+                e.returnValue = '';
+            }
         });
 
         function collectFormPayload() {
@@ -333,6 +500,50 @@
                 ssh_private_key: document.getElementById('proj_ssh_private_key').value.trim(),
                 ssh_passphrase: document.getElementById('proj_ssh_passphrase').value
             };
+        }
+
+        function populateCleanBaseline(project) {
+            form.reset();
+            const presetGroup = document.getElementById('presetGroup');
+            const savedPwBadge = document.getElementById('savedPasswordBadge');
+            const savedKeyBadge = document.getElementById('savedKeyBadge');
+            const pwHint = document.getElementById('passwordHint');
+
+            if (project && project.id) {
+                document.getElementById('proj_id').value = project.id;
+                document.getElementById('proj_name').value = project.name || '';
+                document.getElementById('proj_environment').value = project.environment || 'production';
+                document.getElementById('proj_remote_path').value = project.remote_path || '';
+                document.getElementById('proj_branch').value = project.repo_branch || 'main';
+                document.getElementById('proj_description').value = project.description || '';
+                document.getElementById('proj_ssh_host').value = project.ssh_host || '';
+                document.getElementById('proj_ssh_port').value = project.ssh_port || 22;
+                document.getElementById('proj_ssh_username').value = project.ssh_username || '';
+                authSelect.value = project.ssh_auth_type || 'password';
+                document.getElementById('proj_command_timeout').value = project.command_timeout || 300;
+                presetGroup.style.display = 'none';
+
+                savedPwBadge.style.display = project.has_password ? '' : 'none';
+                savedKeyBadge.style.display = project.has_private_key ? '' : 'none';
+                pwInput.placeholder = project.has_password
+                    ? 'Leave blank to keep saved password, or enter new password to update'
+                    : 'Enter SSH password';
+                pwHint.textContent = project.has_password
+                    ? 'Your existing SSH password remains encrypted in the AES-256-GCM vault unless you type a new one.'
+                    : 'Encrypted at rest with AES-256-GCM and never sent back to the browser.';
+            } else {
+                document.getElementById('proj_id').value = '';
+                document.getElementById('proj_ssh_port').value = 22;
+                document.getElementById('proj_branch').value = 'main';
+                document.getElementById('proj_command_timeout').value = 300;
+                authSelect.value = 'password';
+                presetGroup.style.display = '';
+                savedPwBadge.style.display = 'none';
+                savedKeyBadge.style.display = 'none';
+                pwInput.placeholder = 'Enter SSH password';
+                pwHint.textContent = 'Encrypted at rest with AES-256-GCM and never sent back to the browser.';
+            }
+            syncAuthVisibility();
         }
 
         testBtn.addEventListener('click', async () => {
@@ -377,7 +588,12 @@
             try {
                 const res = await apiPost(isEdit ? 'update_project' : 'create_project', payload);
                 toast(isEdit ? 'Project & SSH settings updated securely.' : 'Project created with encrypted SSH credentials.', 'success');
-                closeModal();
+                modalDrafts.delete(currentContextKey);
+                form.reset();
+                baselineSnapshot = '';
+                if (dirtyBadge) dirtyBadge.style.display = 'none';
+                if (draftNotice) draftNotice.style.display = 'none';
+                hideModalDom();
                 if (modalSaveCallback) {
                     modalSaveCallback(res.project, true, res.stats);
                 }
@@ -391,56 +607,38 @@
 
         window.DeployerApp.openProjectModal = function (project = null, onSaved = null, focusSsh = false) {
             modalSaveCallback = onSaved;
-            form.reset();
+            currentSourceProject = project && project.id ? { ...project } : null;
+            currentContextKey = currentSourceProject ? ('edit:' + currentSourceProject.id) : 'new';
+
             testBanner.className = 'ssh-test-banner';
             testBanner.textContent = '';
             pwInput.type = 'password';
             togglePwBtn.textContent = 'Show';
+            if (unsavedGuard) unsavedGuard.style.display = 'none';
 
             const titleEl = document.getElementById('projectModalTitle');
-            const presetGroup = document.getElementById('presetGroup');
-            const savedPwBadge = document.getElementById('savedPasswordBadge');
-            const savedKeyBadge = document.getElementById('savedKeyBadge');
-            const pwHint = document.getElementById('passwordHint');
-
-            if (project && project.id) {
-                titleEl.textContent = focusSsh ? ('SSH Settings — ' + project.name) : ('Edit Project & SSH — ' + project.name);
-                document.getElementById('proj_id').value = project.id;
-                document.getElementById('proj_name').value = project.name || '';
-                document.getElementById('proj_environment').value = project.environment || 'production';
-                document.getElementById('proj_remote_path').value = project.remote_path || '';
-                document.getElementById('proj_branch').value = project.repo_branch || 'main';
-                document.getElementById('proj_description').value = project.description || '';
-                document.getElementById('proj_ssh_host').value = project.ssh_host || '';
-                document.getElementById('proj_ssh_port').value = project.ssh_port || 22;
-                document.getElementById('proj_ssh_username').value = project.ssh_username || '';
-                authSelect.value = project.ssh_auth_type || 'password';
-                document.getElementById('proj_command_timeout').value = project.command_timeout || 300;
-                presetGroup.style.display = 'none';
-
-                savedPwBadge.style.display = project.has_password ? '' : 'none';
-                savedKeyBadge.style.display = project.has_private_key ? '' : 'none';
-                pwInput.placeholder = project.has_password
-                    ? 'Leave blank to keep saved password, or enter new password to update'
-                    : 'Enter SSH password';
-                pwHint.textContent = project.has_password
-                    ? 'Your existing SSH password remains encrypted in the AES-256-GCM vault unless you type a new one.'
-                    : 'Encrypted at rest with AES-256-GCM and never sent back to the browser.';
+            if (currentSourceProject) {
+                titleEl.textContent = focusSsh
+                    ? ('SSH Settings — ' + currentSourceProject.name)
+                    : ('Edit Project & SSH — ' + currentSourceProject.name);
             } else {
                 titleEl.textContent = 'Add New Project';
-                document.getElementById('proj_id').value = '';
-                document.getElementById('proj_ssh_port').value = 22;
-                document.getElementById('proj_branch').value = 'main';
-                document.getElementById('proj_command_timeout').value = 300;
-                authSelect.value = 'password';
-                presetGroup.style.display = '';
-                savedPwBadge.style.display = 'none';
-                savedKeyBadge.style.display = 'none';
-                pwInput.placeholder = 'Enter SSH password';
-                pwHint.textContent = 'Encrypted at rest with AES-256-GCM and never sent back to the browser.';
             }
 
-            syncAuthVisibility();
+            // 1. Establish clean saved/default baseline snapshot first
+            populateCleanBaseline(currentSourceProject);
+            baselineSnapshot = serializeCurrentState();
+
+            // 2. Restore any preserved unsaved draft for this exact context so inputs are never lost
+            const savedDraft = modalDrafts.get(currentContextKey);
+            if (savedDraft) {
+                applyRawFields(savedDraft);
+                if (draftNotice) draftNotice.style.display = 'flex';
+            } else {
+                if (draftNotice) draftNotice.style.display = 'none';
+            }
+
+            syncDirtyIndicators();
             modal.classList.add('open');
             modal.setAttribute('aria-hidden', 'false');
 

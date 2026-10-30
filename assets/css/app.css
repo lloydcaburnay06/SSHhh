@@ -1280,6 +1280,55 @@ a {
     display: flex;
     flex-direction: column;
     box-shadow: var(--shadow-lg);
+    transition: border-color 0.16s ease, transform 0.16s ease;
+}
+
+.modal.modal-locked-nudge {
+    border-color: var(--accent-amber);
+    animation: modalNudge 0.24s ease-in-out;
+}
+
+@keyframes modalNudge {
+    0%, 100% { transform: scale(1); }
+    40% { transform: scale(1.012); }
+    75% { transform: scale(0.995); }
+}
+
+.modal-draft-notice {
+    padding: 9px 22px;
+    background: rgba(56, 189, 248, 0.1);
+    border-bottom: 1px solid rgba(56, 189, 248, 0.28);
+    color: #7dd3fc;
+    font-size: 12.5px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-shrink: 0;
+}
+
+.modal-unsaved-guard {
+    padding: 12px 22px;
+    background: rgba(245, 158, 11, 0.13);
+    border-bottom: 1px solid rgba(245, 158, 11, 0.38);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-shrink: 0;
+}
+
+.modal-unsaved-guard .guard-text {
+    font-size: 12.5px;
+    color: #fde68a;
+}
+
+.modal-unsaved-guard .guard-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
 }
 
 .modal > form {
@@ -1652,6 +1701,19 @@ a {
     .modal-header,
     .modal-body {
         padding: 16px;
+    }
+
+    .modal-draft-notice,
+    .modal-unsaved-guard {
+        padding: 11px 16px;
+    }
+
+    .modal-unsaved-guard .guard-actions {
+        width: 100%;
+    }
+
+    .modal-unsaved-guard .guard-actions .btn {
+        flex: 1 1 auto;
     }
 
     .modal-footer {
