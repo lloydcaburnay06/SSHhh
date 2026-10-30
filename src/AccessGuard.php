@@ -334,7 +334,7 @@ final class AccessGuard
     <link rel="icon" type="image/svg+xml" href="assets/img/icon.svg">
     <link rel="icon" type="image/png" sizes="32x32" href="assets/img/favicon-32.png">
     <link rel="apple-touch-icon" sizes="180x180" href="assets/img/apple-touch-icon.png">
-    <link rel="stylesheet" href="assets/css/app.css?v=1.1.9">
+    <link rel="stylesheet" href="assets/css/app.css?v=1.2.0">
 </head>
 <body class="totp-auth-page">
     <div class="totp-auth-container">
@@ -502,7 +502,7 @@ final class AccessGuard
     <link rel="icon" type="image/svg+xml" href="assets/img/icon.svg">
     <link rel="icon" type="image/png" sizes="32x32" href="assets/img/favicon-32.png">
     <link rel="apple-touch-icon" sizes="180x180" href="assets/img/apple-touch-icon.png">
-    <link rel="stylesheet" href="assets/css/app.css?v=1.1.9">
+    <link rel="stylesheet" href="assets/css/app.css?v=1.2.0">
 </head>
 <body class="totp-auth-page">
     <div class="totp-auth-container" style="max-width:420px;">
