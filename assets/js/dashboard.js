@@ -107,6 +107,7 @@
                     <div class="project-card-footer">
                         <div class="card-actions-left">
                             <button type="button" class="btn btn-ghost btn-sm" data-action="edit" data-id="${p.id}">Edit</button>
+                            <button type="button" class="btn btn-ghost btn-sm" data-action="duplicate" data-id="${p.id}" title="Duplicate project &amp; command template">Duplicate</button>
                             <button type="button" class="btn btn-ghost btn-sm" data-action="ssh" data-id="${p.id}">SSH Settings</button>
                             <button type="button" class="btn btn-ghost btn-sm" data-action="test-ssh" data-id="${p.id}">Test SSH</button>
                             <button type="button" class="btn btn-danger btn-sm" data-action="delete" data-id="${p.id}">Delete</button>
@@ -138,6 +139,9 @@
                 App.apiGet('list_events', { limit: 30 })
             ]);
             projects = projData.projects || [];
+            if (App.setAvailableProjects) {
+                App.setAvailableProjects(projects);
+            }
             updateStats(projData.stats);
             globalEvents = evData.items || [];
             renderProjects();
@@ -156,6 +160,9 @@
     }
 
     document.addEventListener('DOMContentLoaded', () => {
+        if (App.setAvailableProjects) {
+            App.setAvailableProjects(projects);
+        }
         renderProjects();
         renderGlobalEvents();
 
@@ -185,6 +192,12 @@
             const action = btn.dataset.action;
             if (action === 'edit') {
                 App.openProjectModal(project, async () => refreshAll(), false);
+            } else if (action === 'duplicate') {
+                App.openDuplicateModal(project, async (savedProject, wasSaved) => {
+                    if (wasSaved && savedProject) {
+                        await refreshAll();
+                    }
+                });
             } else if (action === 'ssh') {
                 App.openProjectModal(project, async () => refreshAll(), true);
             } else if (action === 'test-ssh') {

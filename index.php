@@ -92,7 +92,7 @@ require __DIR__ . '/src/Views/header.php';
         'events'   => $recentEvents['items'],
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
 </script>
-<script src="assets/js/common.js?v=1.1.2"></script>
-<script src="assets/js/dashboard.js?v=1.1.2"></script>
+<script src="assets/js/common.js?v=1.1.3"></script>
+<script src="assets/js/dashboard.js?v=1.1.3"></script>
 </body>
 </html>

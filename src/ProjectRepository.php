@@ -128,7 +128,50 @@ final class ProjectRepository
      */
     public function create(array $input): array
     {
-        $data = $this->validateProjectInput($input, true);
+        $sourceProjectId = isset($input['source_project_id']) && (int) $input['source_project_id'] > 0
+            ? (int) $input['source_project_id']
+            : null;
+        $reuseSourceCredentials = $sourceProjectId !== null && !empty($input['reuse_source_credentials']);
+        $sourceBundle = $reuseSourceCredentials
+            ? $this->getWithDecryptedCredentials($sourceProjectId)
+            : null;
+        $sourceProjectMeta = $sourceBundle['project']
+            ?? ($sourceProjectId !== null ? $this->find($sourceProjectId) : null);
+
+        $resolvedInput = $input;
+        $reusedFromSourceVault = false;
+        if ($sourceBundle !== null) {
+            $rawPassword = (string) ($input['ssh_password'] ?? '');
+            $rawPrivateKey = trim((string) ($input['ssh_private_key'] ?? ''));
+            $rawPassphrase = (string) ($input['ssh_passphrase'] ?? '');
+
+            if ($rawPassword === '' && $sourceBundle['password'] !== '') {
+                $resolvedInput['ssh_password'] = $sourceBundle['password'];
+                $reusedFromSourceVault = true;
+            }
+            if ($rawPrivateKey === '' && $sourceBundle['private_key'] !== '') {
+                $resolvedInput['ssh_private_key'] = $sourceBundle['private_key'];
+                if ($rawPassphrase === '' && $sourceBundle['passphrase'] !== '') {
+                    $resolvedInput['ssh_passphrase'] = $sourceBundle['passphrase'];
+                }
+                $reusedFromSourceVault = true;
+            }
+        }
+
+        $data = $this->validateProjectInput($resolvedInput, true);
+
+        // Pre-validate template project before opening transaction if cloning from an existing project
+        $preset = trim((string) ($input['preset'] ?? 'git_basic'));
+        $templateProject = null;
+        $clonedCommands = null;
+        if (str_starts_with($preset, 'project:')) {
+            $templateProjectId = (int) substr($preset, 8);
+            $templateProject = $templateProjectId > 0 ? $this->find($templateProjectId) : null;
+            if (!$templateProject) {
+                throw new InvalidArgumentException('Selected command template project was not found.');
+            }
+            $clonedCommands = $this->listCommands($templateProjectId);
+        }
 
         $passwordEnc = $data['ssh_password'] !== ''
             ? $this->crypto->encrypt($data['ssh_password'], 'ssh-password')
@@ -197,40 +240,78 @@ final class ProjectRepository
 
             $projectId = (int) $this->pdo->lastInsertId();
 
-            // Seed starter pipeline commands if requested
-            $preset = trim((string) ($input['preset'] ?? 'git_basic'));
-            $starterCommands = $this->getStarterPresetCommands($preset, $data['repo_branch']);
+            // Seed command pipeline from either a cloned project template or a built-in starter preset
+            $cmdStmt = $this->pdo->prepare(<<<'SQL'
+                INSERT INTO `project_commands` (`project_id`, `name`, `command`, `sort_order`, `is_enabled`, `stop_on_error`)
+                VALUES (:project_id, :name, :command, :sort_order, :is_enabled, :stop_on_error)
+            SQL);
+
             $order = 1;
-            foreach ($starterCommands as $cmd) {
-                $cmdStmt = $this->pdo->prepare(<<<'SQL'
-                    INSERT INTO `project_commands` (`project_id`, `name`, `command`, `sort_order`, `is_enabled`, `stop_on_error`)
-                    VALUES (:project_id, :name, :command, :sort_order, 1, 1)
-                SQL);
-                $cmdStmt->execute([
-                    ':project_id' => $projectId,
-                    ':name'       => $cmd['name'],
-                    ':command'    => $cmd['command'],
-                    ':sort_order' => $order++,
-                ]);
+            $seededCount = 0;
+            if ($templateProject !== null && is_array($clonedCommands)) {
+                foreach ($clonedCommands as $cmd) {
+                    $cmdStmt->execute([
+                        ':project_id'    => $projectId,
+                        ':name'          => (string) $cmd['name'],
+                        ':command'       => (string) $cmd['command'],
+                        ':sort_order'    => $order++,
+                        ':is_enabled'    => !empty($cmd['is_enabled']) ? 1 : 0,
+                        ':stop_on_error' => !empty($cmd['stop_on_error']) ? 1 : 0,
+                    ]);
+                    $seededCount++;
+                }
+                $templateSummary = sprintf(
+                    'Cloned %d commands from "%s" (#%d)',
+                    $seededCount,
+                    (string) $templateProject['name'],
+                    (int) $templateProject['id']
+                );
+            } else {
+                $starterCommands = $this->getStarterPresetCommands($preset, $data['repo_branch']);
+                foreach ($starterCommands as $cmd) {
+                    $cmdStmt->execute([
+                        ':project_id'    => $projectId,
+                        ':name'          => $cmd['name'],
+                        ':command'       => $cmd['command'],
+                        ':sort_order'    => $order++,
+                        ':is_enabled'    => 1,
+                        ':stop_on_error' => 1,
+                    ]);
+                    $seededCount++;
+                }
+                $templateSummary = sprintf('%d (%s preset)', $seededCount, $preset !== '' ? $preset : 'git_basic');
             }
 
             $target = $this->formatSshTarget($data['ssh_username'], $data['ssh_host'], $data['ssh_port'], $data['remote_path']);
+            $vaultStatus = ($passwordEnc !== null || $privateKeyEnc !== null)
+                ? ($reusedFromSourceVault ? 're-encrypted from source vault with fresh AES-256-GCM IV' : 'encrypted with AES-256-GCM')
+                : 'no secret stored yet';
+
+            $eventTitle = $sourceProjectMeta !== null
+                ? sprintf(
+                    'Created project "%s" (%s) duplicated from "%s"',
+                    $data['name'],
+                    strtoupper($data['environment']),
+                    (string) $sourceProjectMeta['name']
+                )
+                : sprintf('Created project "%s" (%s)', $data['name'], strtoupper($data['environment']));
+
             $this->logger->log([
                 'project_id'   => $projectId,
                 'project_name' => $data['name'],
                 'category'     => 'audit',
                 'event_type'   => 'project_created',
                 'status'       => 'info',
-                'title'        => sprintf('Created project "%s" (%s)', $data['name'], strtoupper($data['environment'])),
+                'title'        => $eventTitle,
                 'ssh_target'   => $target,
                 'output_log'   => sprintf(
-                    "Project initialized.\nEnvironment: %s\nBranch: %s\nSSH Target: %s\nAuth Method: %s (%s)\nSeeded Commands: %d",
+                    "Project initialized.\nEnvironment: %s\nBranch: %s\nSSH Target: %s\nAuth Method: %s (%s)\nCommand Template: %s",
                     $data['environment'],
                     $data['repo_branch'],
                     $target,
                     $data['ssh_auth_type'],
-                    ($passwordEnc !== null || $privateKeyEnc !== null) ? 'encrypted with AES-256-GCM' : 'no secret stored yet',
-                    count($starterCommands)
+                    $vaultStatus,
+                    $templateSummary
                 ),
             ]);
 

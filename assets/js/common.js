@@ -272,7 +272,8 @@
 
     // Shared Project & SSH Modal Controller
     let modalSaveCallback = null;
-    const modalDrafts = new Map(); // contextKey ('new' | 'edit:<id>') -> raw field map
+    const modalDrafts = new Map(); // contextKey ('new' | 'edit:<id>' | 'duplicate:<id>') -> raw field map
+    let availableTemplateProjects = [];
 
     function initProjectModal() {
         const modal = document.getElementById('projectModal');
@@ -281,12 +282,18 @@
         const dialog = document.getElementById('projectModalDialog');
         const form = document.getElementById('projectForm');
         const authSelect = document.getElementById('proj_ssh_auth_type');
+        const presetSelect = document.getElementById('proj_preset');
+        const existingTemplatesGroup = document.getElementById('existingProjectTemplatesGroup');
+        const duplicateTemplateBadge = document.getElementById('duplicateTemplateBadge');
+        const duplicateCredWrap = document.getElementById('duplicateCredReuseWrap');
+        const reuseCredCheckbox = document.getElementById('proj_reuse_credentials');
         const pwFields = document.getElementById('passwordAuthFields');
         const keyFields = document.getElementById('keyAuthFields');
         const togglePwBtn = document.getElementById('togglePwVisibilityBtn');
         const pwInput = document.getElementById('proj_ssh_password');
         const testBtn = document.getElementById('modalTestSshBtn');
         const testBanner = document.getElementById('modalSshTestBanner');
+        const saveBtnEl = document.getElementById('saveProjectBtn');
 
         const dirtyBadge = document.getElementById('modalDirtyBadge');
         const draftNotice = document.getElementById('modalDraftNotice');
@@ -296,9 +303,61 @@
         const keepDraftCloseBtn = document.getElementById('modalKeepDraftCloseBtn');
         const discardCloseBtn = document.getElementById('modalDiscardCloseBtn');
 
+        let currentMode = 'new'; // 'new' | 'edit' | 'duplicate'
         let currentContextKey = 'new';
         let currentSourceProject = null;
         let baselineSnapshot = '';
+
+        // Seed initial available projects for template cloning dropdown
+        if (window.INITIAL_DASHBOARD_DATA && Array.isArray(window.INITIAL_DASHBOARD_DATA.projects)) {
+            availableTemplateProjects = window.INITIAL_DASHBOARD_DATA.projects.slice();
+        } else if (window.INITIAL_PROJECT_PAGE) {
+            if (Array.isArray(window.INITIAL_PROJECT_PAGE.all_projects)) {
+                availableTemplateProjects = window.INITIAL_PROJECT_PAGE.all_projects.slice();
+            } else if (window.INITIAL_PROJECT_PAGE.project) {
+                availableTemplateProjects = [window.INITIAL_PROJECT_PAGE.project];
+            }
+        }
+
+        function syncProjectTemplateOptions(ensureProject = null) {
+            if (!existingTemplatesGroup || !presetSelect) return;
+
+            const prevVal = presetSelect.value;
+            const byId = new Map();
+            for (const p of availableTemplateProjects) {
+                if (p && Number(p.id) > 0) {
+                    byId.set(Number(p.id), p);
+                }
+            }
+            if (ensureProject && Number(ensureProject.id) > 0) {
+                byId.set(Number(ensureProject.id), ensureProject);
+            }
+
+            const list = Array.from(byId.values());
+            if (list.length === 0) {
+                existingTemplatesGroup.hidden = true;
+                existingTemplatesGroup.innerHTML = '';
+                return;
+            }
+
+            existingTemplatesGroup.hidden = false;
+            existingTemplatesGroup.innerHTML = list.map((p) => {
+                const count = Number(p.command_count ?? 0);
+                const plural = count === 1 ? 'command' : 'commands';
+                return `<option value="project:${Number(p.id)}">Clone "${escapeHtml(p.name)}" (${count} ${plural})</option>`;
+            }).join('');
+
+            if (prevVal && Array.from(presetSelect.options).some((opt) => opt.value === prevVal)) {
+                presetSelect.value = prevVal;
+            }
+        }
+
+        window.DeployerApp.setAvailableProjects = function (projectsList) {
+            availableTemplateProjects = Array.isArray(projectsList) ? projectsList.slice() : [];
+            syncProjectTemplateOptions(currentSourceProject);
+        };
+
+        syncProjectTemplateOptions();
 
         function nudgeModal() {
             if (!dialog) return;
@@ -314,14 +373,64 @@
             keyFields.style.display = isKey ? '' : 'none';
         }
 
+        function syncTemplateBadge() {
+            if (!duplicateTemplateBadge || !presetSelect) return;
+            const isCloningProject = currentMode !== 'edit' && String(presetSelect.value || '').startsWith('project:');
+            duplicateTemplateBadge.style.display = isCloningProject ? '' : 'none';
+        }
+
+        function syncCredentialBadgesAndHints() {
+            const savedPwBadge = document.getElementById('savedPasswordBadge');
+            const savedKeyBadge = document.getElementById('savedKeyBadge');
+            const pwHint = document.getElementById('passwordHint');
+
+            if (currentMode === 'edit' && currentSourceProject) {
+                if (duplicateCredWrap) duplicateCredWrap.style.display = 'none';
+                savedPwBadge.innerHTML = '&#128274; Encrypted password stored';
+                savedKeyBadge.innerHTML = '&#128274; Encrypted private key stored';
+                savedPwBadge.style.display = currentSourceProject.has_password ? '' : 'none';
+                savedKeyBadge.style.display = currentSourceProject.has_private_key ? '' : 'none';
+                pwInput.placeholder = currentSourceProject.has_password
+                    ? 'Leave blank to keep saved password, or enter new password to update'
+                    : 'Enter SSH password';
+                pwHint.textContent = currentSourceProject.has_password
+                    ? 'Your existing SSH password remains encrypted in the AES-256-GCM vault unless you type a new one.'
+                    : 'Encrypted at rest with AES-256-GCM and never sent back to the browser.';
+            } else if (currentMode === 'duplicate' && currentSourceProject) {
+                const sourceHasCreds = Boolean(currentSourceProject.has_password || currentSourceProject.has_private_key);
+                if (duplicateCredWrap) {
+                    duplicateCredWrap.style.display = sourceHasCreds ? '' : 'none';
+                }
+                const reusing = sourceHasCreds && Boolean(reuseCredCheckbox && reuseCredCheckbox.checked);
+                savedPwBadge.innerHTML = '&#128274; Reusing source encrypted password';
+                savedKeyBadge.innerHTML = '&#128274; Reusing source encrypted private key';
+                savedPwBadge.style.display = (reusing && currentSourceProject.has_password) ? '' : 'none';
+                savedKeyBadge.style.display = (reusing && currentSourceProject.has_private_key) ? '' : 'none';
+                pwInput.placeholder = (reusing && currentSourceProject.has_password)
+                    ? 'Leave blank to reuse source password, or enter a new password to override'
+                    : 'Enter SSH password';
+                pwHint.textContent = (reusing && currentSourceProject.has_password)
+                    ? 'Source project password will be re-encrypted with a fresh AES-256-GCM IV unless you type a new one.'
+                    : 'Encrypted at rest with AES-256-GCM and never sent back to the browser.';
+            } else {
+                if (duplicateCredWrap) duplicateCredWrap.style.display = 'none';
+                savedPwBadge.style.display = 'none';
+                savedKeyBadge.style.display = 'none';
+                pwInput.placeholder = 'Enter SSH password';
+                pwHint.textContent = 'Encrypted at rest with AES-256-GCM and never sent back to the browser.';
+            }
+        }
+
         function collectRawFields() {
             return {
                 id: document.getElementById('proj_id').value,
+                source_project_id: document.getElementById('proj_source_id').value,
+                reuse_source_credentials: Boolean(reuseCredCheckbox && reuseCredCheckbox.checked),
                 name: document.getElementById('proj_name').value,
                 environment: document.getElementById('proj_environment').value,
                 remote_path: document.getElementById('proj_remote_path').value,
                 repo_branch: document.getElementById('proj_branch').value,
-                preset: document.getElementById('proj_preset').value,
+                preset: presetSelect.value,
                 description: document.getElementById('proj_description').value,
                 ssh_host: document.getElementById('proj_ssh_host').value,
                 ssh_port: document.getElementById('proj_ssh_port').value,
@@ -336,11 +445,20 @@
 
         function applyRawFields(fields) {
             document.getElementById('proj_id').value = fields.id ?? '';
+            document.getElementById('proj_source_id').value = fields.source_project_id ?? '';
+            if (reuseCredCheckbox) {
+                reuseCredCheckbox.checked = Boolean(fields.reuse_source_credentials);
+            }
             document.getElementById('proj_name').value = fields.name ?? '';
             document.getElementById('proj_environment').value = fields.environment || 'production';
             document.getElementById('proj_remote_path').value = fields.remote_path ?? '';
             document.getElementById('proj_branch').value = fields.repo_branch ?? 'main';
-            document.getElementById('proj_preset').value = fields.preset || 'git_basic';
+            const desiredPreset = fields.preset || 'git_basic';
+            if (Array.from(presetSelect.options).some((opt) => opt.value === desiredPreset)) {
+                presetSelect.value = desiredPreset;
+            } else {
+                presetSelect.value = 'git_basic';
+            }
             document.getElementById('proj_description').value = fields.description ?? '';
             document.getElementById('proj_ssh_host').value = fields.ssh_host ?? '';
             document.getElementById('proj_ssh_port').value = fields.ssh_port ?? 22;
@@ -351,6 +469,8 @@
             document.getElementById('proj_ssh_private_key').value = fields.ssh_private_key ?? '';
             document.getElementById('proj_ssh_passphrase').value = fields.ssh_passphrase ?? '';
             syncAuthVisibility();
+            syncCredentialBadgesAndHints();
+            syncTemplateBadge();
         }
 
         function serializeCurrentState() {
@@ -379,6 +499,18 @@
             syncAuthVisibility();
             syncDirtyIndicators();
         });
+
+        presetSelect.addEventListener('change', () => {
+            syncTemplateBadge();
+            syncDirtyIndicators();
+        });
+
+        if (reuseCredCheckbox) {
+            reuseCredCheckbox.addEventListener('change', () => {
+                syncCredentialBadgesAndHints();
+                syncDirtyIndicators();
+            });
+        }
 
         form.addEventListener('input', () => {
             if (unsavedGuard && unsavedGuard.style.display !== 'none') {
@@ -482,14 +614,17 @@
 
         function collectFormPayload() {
             const idVal = document.getElementById('proj_id').value;
+            const sourceIdVal = document.getElementById('proj_source_id').value;
             return {
                 id: idVal ? Number(idVal) : undefined,
                 project_id: idVal ? Number(idVal) : undefined,
+                source_project_id: (!idVal && sourceIdVal) ? Number(sourceIdVal) : undefined,
+                reuse_source_credentials: (!idVal && sourceIdVal) ? Boolean(reuseCredCheckbox && reuseCredCheckbox.checked) : false,
                 name: document.getElementById('proj_name').value.trim(),
                 environment: document.getElementById('proj_environment').value,
                 remote_path: document.getElementById('proj_remote_path').value.trim(),
                 repo_branch: document.getElementById('proj_branch').value.trim() || 'main',
-                preset: document.getElementById('proj_preset').value,
+                preset: presetSelect.value,
                 description: document.getElementById('proj_description').value.trim(),
                 ssh_host: document.getElementById('proj_ssh_host').value.trim(),
                 ssh_port: Number(document.getElementById('proj_ssh_port').value) || 22,
@@ -505,12 +640,11 @@
         function populateCleanBaseline(project) {
             form.reset();
             const presetGroup = document.getElementById('presetGroup');
-            const savedPwBadge = document.getElementById('savedPasswordBadge');
-            const savedKeyBadge = document.getElementById('savedKeyBadge');
-            const pwHint = document.getElementById('passwordHint');
 
-            if (project && project.id) {
+            if (currentMode === 'edit' && project && project.id) {
                 document.getElementById('proj_id').value = project.id;
+                document.getElementById('proj_source_id').value = '';
+                if (reuseCredCheckbox) reuseCredCheckbox.checked = false;
                 document.getElementById('proj_name').value = project.name || '';
                 document.getElementById('proj_environment').value = project.environment || 'production';
                 document.getElementById('proj_remote_path').value = project.remote_path || '';
@@ -522,28 +656,46 @@
                 authSelect.value = project.ssh_auth_type || 'password';
                 document.getElementById('proj_command_timeout').value = project.command_timeout || 300;
                 presetGroup.style.display = 'none';
-
-                savedPwBadge.style.display = project.has_password ? '' : 'none';
-                savedKeyBadge.style.display = project.has_private_key ? '' : 'none';
-                pwInput.placeholder = project.has_password
-                    ? 'Leave blank to keep saved password, or enter new password to update'
-                    : 'Enter SSH password';
-                pwHint.textContent = project.has_password
-                    ? 'Your existing SSH password remains encrypted in the AES-256-GCM vault unless you type a new one.'
-                    : 'Encrypted at rest with AES-256-GCM and never sent back to the browser.';
-            } else {
+            } else if (currentMode === 'duplicate' && project && project.id) {
+                syncProjectTemplateOptions(project);
                 document.getElementById('proj_id').value = '';
+                document.getElementById('proj_source_id').value = project.id;
+                if (reuseCredCheckbox) {
+                    reuseCredCheckbox.checked = Boolean(project.has_password || project.has_private_key);
+                }
+                document.getElementById('proj_name').value = (project.name || 'Project') + ' (Copy)';
+                document.getElementById('proj_environment').value = project.environment || 'production';
+                document.getElementById('proj_remote_path').value = project.remote_path || '';
+                document.getElementById('proj_branch').value = project.repo_branch || 'main';
+                document.getElementById('proj_description').value = project.description || '';
+                document.getElementById('proj_ssh_host').value = project.ssh_host || '';
+                document.getElementById('proj_ssh_port').value = project.ssh_port || 22;
+                document.getElementById('proj_ssh_username').value = project.ssh_username || '';
+                authSelect.value = project.ssh_auth_type || 'password';
+                document.getElementById('proj_command_timeout').value = project.command_timeout || 300;
+                presetGroup.style.display = '';
+                const clonePresetValue = 'project:' + Number(project.id);
+                if (Array.from(presetSelect.options).some((opt) => opt.value === clonePresetValue)) {
+                    presetSelect.value = clonePresetValue;
+                } else {
+                    presetSelect.value = 'git_basic';
+                }
+            } else {
+                syncProjectTemplateOptions();
+                document.getElementById('proj_id').value = '';
+                document.getElementById('proj_source_id').value = '';
+                if (reuseCredCheckbox) reuseCredCheckbox.checked = false;
                 document.getElementById('proj_ssh_port').value = 22;
                 document.getElementById('proj_branch').value = 'main';
                 document.getElementById('proj_command_timeout').value = 300;
                 authSelect.value = 'password';
                 presetGroup.style.display = '';
-                savedPwBadge.style.display = 'none';
-                savedKeyBadge.style.display = 'none';
-                pwInput.placeholder = 'Enter SSH password';
-                pwHint.textContent = 'Encrypted at rest with AES-256-GCM and never sent back to the browser.';
+                presetSelect.value = 'git_basic';
             }
+
             syncAuthVisibility();
+            syncCredentialBadgesAndHints();
+            syncTemplateBadge();
         }
 
         testBtn.addEventListener('click', async () => {
@@ -580,14 +732,20 @@
             const saveBtn = document.getElementById('saveProjectBtn');
             const payload = collectFormPayload();
             const isEdit = Boolean(payload.id);
+            const isDuplicate = !isEdit && currentMode === 'duplicate';
 
             saveBtn.disabled = true;
             const origLabel = saveBtn.textContent;
-            saveBtn.textContent = 'Saving...';
+            saveBtn.textContent = isDuplicate ? 'Duplicating...' : 'Saving...';
 
             try {
                 const res = await apiPost(isEdit ? 'update_project' : 'create_project', payload);
-                toast(isEdit ? 'Project & SSH settings updated securely.' : 'Project created with encrypted SSH credentials.', 'success');
+                const successMsg = isEdit
+                    ? 'Project & SSH settings updated securely.'
+                    : (isDuplicate
+                        ? 'Project duplicated with cloned command template.'
+                        : 'Project created with encrypted SSH credentials.');
+                toast(successMsg, 'success');
                 modalDrafts.delete(currentContextKey);
                 form.reset();
                 baselineSnapshot = '';
@@ -605,10 +763,30 @@
             }
         });
 
-        window.DeployerApp.openProjectModal = function (project = null, onSaved = null, focusSsh = false) {
+        window.DeployerApp.openProjectModal = function (project = null, onSaved = null, optionsOrFocusSsh = false) {
+            const opts = (optionsOrFocusSsh && typeof optionsOrFocusSsh === 'object')
+                ? optionsOrFocusSsh
+                : { focusSsh: Boolean(optionsOrFocusSsh), mode: (project && project.id) ? 'edit' : 'new' };
+
+            const focusSsh = Boolean(opts.focusSsh);
+            const hasProject = Boolean(project && project.id);
+
+            if (opts.mode === 'duplicate' && hasProject) {
+                currentMode = 'duplicate';
+                currentSourceProject = { ...project };
+                currentContextKey = 'duplicate:' + currentSourceProject.id;
+            } else if (hasProject) {
+                currentMode = 'edit';
+                currentSourceProject = { ...project };
+                currentContextKey = 'edit:' + currentSourceProject.id;
+            } else {
+                currentMode = 'new';
+                currentSourceProject = null;
+                currentContextKey = 'new';
+            }
+
             modalSaveCallback = onSaved;
-            currentSourceProject = project && project.id ? { ...project } : null;
-            currentContextKey = currentSourceProject ? ('edit:' + currentSourceProject.id) : 'new';
+            syncProjectTemplateOptions(currentSourceProject);
 
             testBanner.className = 'ssh-test-banner';
             testBanner.textContent = '';
@@ -617,12 +795,17 @@
             if (unsavedGuard) unsavedGuard.style.display = 'none';
 
             const titleEl = document.getElementById('projectModalTitle');
-            if (currentSourceProject) {
+            if (currentMode === 'duplicate' && currentSourceProject) {
+                titleEl.textContent = 'Duplicate Project — ' + currentSourceProject.name;
+                if (saveBtnEl) saveBtnEl.textContent = 'Create Duplicate';
+            } else if (currentMode === 'edit' && currentSourceProject) {
                 titleEl.textContent = focusSsh
                     ? ('SSH Settings — ' + currentSourceProject.name)
                     : ('Edit Project & SSH — ' + currentSourceProject.name);
+                if (saveBtnEl) saveBtnEl.textContent = 'Save Project';
             } else {
                 titleEl.textContent = 'Add New Project';
+                if (saveBtnEl) saveBtnEl.textContent = 'Save Project';
             }
 
             // 1. Establish clean saved/default baseline snapshot first
@@ -643,12 +826,21 @@
             modal.setAttribute('aria-hidden', 'false');
 
             setTimeout(() => {
-                if (focusSsh) {
+                if (focusSsh && currentMode === 'edit') {
                     document.getElementById('proj_ssh_host').focus();
                 } else {
-                    document.getElementById('proj_name').focus();
+                    const nameInput = document.getElementById('proj_name');
+                    nameInput.focus();
+                    if (currentMode === 'duplicate' && !savedDraft) {
+                        nameInput.select();
+                    }
                 }
             }, 40);
+        };
+
+        window.DeployerApp.openDuplicateModal = function (sourceProject, onSaved = null) {
+            if (!sourceProject || !sourceProject.id) return;
+            window.DeployerApp.openProjectModal(sourceProject, onSaved, { mode: 'duplicate' });
         };
     }
 

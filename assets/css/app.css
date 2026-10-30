@@ -1515,6 +1515,13 @@ a {
     font-weight: 600;
 }
 
+.duplicate-cred-box {
+    background: rgba(16, 185, 129, 0.07);
+    border: 1px solid rgba(16, 185, 129, 0.25);
+    border-radius: 8px;
+    padding: 11px 13px;
+}
+
 .password-input-wrap {
     position: relative;
     display: flex;
@@ -1728,6 +1735,11 @@ a {
         gap: 8px;
     }
 
+    .hero-actions #editSshHeroBtn {
+        grid-column: 1 / -1;
+        width: 100%;
+    }
+
     .hero-actions #deployAllBtn {
         grid-column: 1 / -1;
         width: 100%;
@@ -1874,6 +1886,10 @@ a {
         display: grid;
         grid-template-columns: repeat(2, 1fr);
         gap: 6px;
+    }
+
+    .card-actions-left .btn-danger {
+        grid-column: 1 / -1;
     }
 
     .card-actions-right,

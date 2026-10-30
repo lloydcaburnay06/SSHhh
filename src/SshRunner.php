@@ -35,6 +35,14 @@ final class SshRunner
             $savedBundle = $this->projects->getWithDecryptedCredentials($projectId);
         }
 
+        $sourceProjectId = ($projectId === null && !empty($input['reuse_source_credentials']) && isset($input['source_project_id']) && (int) $input['source_project_id'] > 0)
+            ? (int) $input['source_project_id']
+            : null;
+        $fallbackBundle = $savedBundle;
+        if ($fallbackBundle === null && $sourceProjectId !== null) {
+            $fallbackBundle = $this->projects->getWithDecryptedCredentials($sourceProjectId);
+        }
+
         $savedProject = $savedBundle['project'] ?? null;
 
         $host = trim((string) ($input['ssh_host'] ?? ($savedProject['ssh_host'] ?? '')));
@@ -45,18 +53,19 @@ final class SshRunner
         $timeout = max(3, min(60, (int) ($input['ssh_timeout'] ?? ($savedProject['ssh_timeout'] ?? 15))));
 
         $password = (string) ($input['ssh_password'] ?? '');
-        if ($password === '' && $savedBundle !== null) {
-            $password = $savedBundle['password'];
+        if ($password === '' && $fallbackBundle !== null) {
+            $password = $fallbackBundle['password'];
         }
 
-        $privateKey = trim((string) ($input['ssh_private_key'] ?? ''));
-        if ($privateKey === '' && $savedBundle !== null) {
-            $privateKey = $savedBundle['private_key'];
+        $rawPrivateKey = trim((string) ($input['ssh_private_key'] ?? ''));
+        $privateKey = $rawPrivateKey;
+        if ($privateKey === '' && $fallbackBundle !== null) {
+            $privateKey = $fallbackBundle['private_key'];
         }
 
         $passphrase = (string) ($input['ssh_passphrase'] ?? '');
-        if ($passphrase === '' && $savedBundle !== null) {
-            $passphrase = $savedBundle['passphrase'];
+        if ($passphrase === '' && $rawPrivateKey === '' && $fallbackBundle !== null) {
+            $passphrase = $fallbackBundle['passphrase'];
         }
 
         if ($host === '' || $username === '') {

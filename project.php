@@ -16,6 +16,7 @@ if (!$project) {
 }
 
 $commands = $app->projects()->listCommands($projectId);
+$allProjects = $app->projects()->listAll();
 $eventsData = $app->logger()->query($projectId, ['limit' => 60]);
 
 $pageTitle = (string) $project['name'];
@@ -46,6 +47,10 @@ require __DIR__ . '/src/Views/header.php';
                     <div class="hero-chips" id="heroChips"></div>
                 </div>
                 <div class="hero-actions">
+                    <button type="button" class="btn btn-secondary" id="duplicateHeroBtn" title="Duplicate this project and its command template">
+                        <span>&#128203;</span>
+                        <span>Duplicate</span>
+                    </button>
                     <button type="button" class="btn btn-secondary" id="testSshHeroBtn">
                         <span>&#9889;</span>
                         <span>Test SSH</span>
@@ -157,12 +162,13 @@ require __DIR__ . '/src/Views/header.php';
 
 <script>
     window.INITIAL_PROJECT_PAGE = <?= json_encode([
-        'project'  => $project,
-        'commands' => $commands,
-        'events'   => $eventsData,
+        'project'      => $project,
+        'commands'     => $commands,
+        'all_projects' => $allProjects,
+        'events'       => $eventsData,
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
 </script>
-<script src="assets/js/common.js?v=1.1.2"></script>
-<script src="assets/js/project.js?v=1.1.2"></script>
+<script src="assets/js/common.js?v=1.1.3"></script>
+<script src="assets/js/project.js?v=1.1.3"></script>
 </body>
 </html>

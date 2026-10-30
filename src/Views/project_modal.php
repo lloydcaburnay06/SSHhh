@@ -26,6 +26,7 @@
 
         <form id="projectForm" autocomplete="off">
             <input type="hidden" id="proj_id" name="id" value="">
+            <input type="hidden" id="proj_source_id" name="source_project_id" value="">
             <div class="modal-body">
                 <div class="form-section-title">Project Details</div>
                 <div class="form-grid">
@@ -53,14 +54,21 @@
                         <span class="form-hint">Exposed to commands as <code>$DEPLOY_BRANCH</code>.</span>
                     </div>
                     <div class="form-group full" id="presetGroup">
-                        <label for="proj_preset">Starter Deployment Commands Template</label>
+                        <label for="proj_preset">
+                            <span id="presetGroupLabel">Deployment Commands Template</span>
+                            <span class="secret-saved-hint" id="duplicateTemplateBadge" style="display:none;">&#128203; Cloning command template</span>
+                        </label>
                         <select class="form-select" id="proj_preset">
-                            <option value="git_basic">Git Status + Git Pull (Recommended starter)</option>
-                            <option value="php_composer">PHP + Git Pull + Composer Install</option>
-                            <option value="laravel">Laravel (Maintenance Mode, Git Pull, Composer, Migrate, Optimize)</option>
-                            <option value="node_pm2">Node.js (Git Pull, NPM CI, Build, PM2 Reload)</option>
-                            <option value="empty">Empty (Add custom commands manually)</option>
+                            <optgroup label="Clone Command Template From Existing Project" id="existingProjectTemplatesGroup" hidden></optgroup>
+                            <optgroup label="Built-in Starter Templates">
+                                <option value="git_basic">Git Status + Git Pull (Recommended starter)</option>
+                                <option value="php_composer">PHP + Git Pull + Composer Install</option>
+                                <option value="laravel">Laravel (Maintenance Mode, Git Pull, Composer, Migrate, Optimize)</option>
+                                <option value="node_pm2">Node.js (Git Pull, NPM CI, Build, PM2 Reload)</option>
+                                <option value="empty">Empty (Add custom commands manually)</option>
+                            </optgroup>
                         </select>
+                        <span class="form-hint" id="presetHint">Select a starter pipeline or clone all deployment commands from an existing project.</span>
                     </div>
                     <div class="form-group full">
                         <label for="proj_description">Notes / Description (Optional)</label>
@@ -95,6 +103,14 @@
                     <div class="form-group">
                         <label for="proj_command_timeout">Command Timeout (seconds)</label>
                         <input type="number" class="form-control" id="proj_command_timeout" min="5" max="3600" value="300">
+                    </div>
+
+                    <div class="form-group full duplicate-cred-box" id="duplicateCredReuseWrap" style="display:none;">
+                        <label class="toggle-label" for="proj_reuse_credentials" style="justify-content:flex-start; color:var(--text-primary); font-size:13px;">
+                            <input type="checkbox" id="proj_reuse_credentials" checked>
+                            <span id="reuseCredLabel">Reuse saved encrypted SSH credentials from source project</span>
+                        </label>
+                        <span class="form-hint" id="reuseCredHint">Re-encrypts stored credentials server-side with a fresh AES-256-GCM IV without exposing secrets. Uncheck or enter a new password/key below for a different server.</span>
                     </div>
 
                     <div class="form-group full" id="passwordAuthFields">

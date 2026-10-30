@@ -5,8 +5,23 @@
     const initData = window.INITIAL_PROJECT_PAGE || {};
 
     let project = initData.project;
+    let allProjects = Array.isArray(initData.all_projects) ? initData.all_projects.slice() : (project ? [project] : []);
     let commands = Array.isArray(initData.commands) ? initData.commands.map(cloneCmd) : [];
     let eventsState = initData.events || { items: [], total: 0, counts: {} };
+
+    function syncAvailableProjectsState(updatedProject = null) {
+        if (updatedProject && updatedProject.id) {
+            const idx = allProjects.findIndex((p) => Number(p.id) === Number(updatedProject.id));
+            if (idx !== -1) {
+                allProjects[idx] = updatedProject;
+            } else {
+                allProjects.unshift(updatedProject);
+            }
+        }
+        if (App.setAvailableProjects) {
+            App.setAvailableProjects(allProjects);
+        }
+    }
 
     let isDirty = false;
     let isExecuting = false;
@@ -193,6 +208,8 @@
         document.getElementById('saveCommandsBtn').disabled = locked;
         document.getElementById('addCommandBtn').disabled = locked;
         document.getElementById('testSshHeroBtn').disabled = locked;
+        const dupBtn = document.getElementById('duplicateHeroBtn');
+        if (dupBtn) dupBtn.disabled = locked;
         document.getElementById('runAdhocBtn').disabled = locked;
         document.getElementById('consoleStateBadge').innerHTML = statusHtml;
         renderCommands();
@@ -217,7 +234,10 @@
                 commands
             });
             commands = (res.commands || []).map(cloneCmd);
-            if (res.project) project = res.project;
+            if (res.project) {
+                project = res.project;
+                syncAvailableProjectsState(project);
+            }
             setDirty(false);
             renderHero();
             renderCommands();
@@ -399,6 +419,7 @@
     }
 
     document.addEventListener('DOMContentLoaded', () => {
+        syncAvailableProjectsState(project);
         renderHero();
         renderCommands();
         renderEvents();
@@ -408,10 +429,31 @@
             runExecution('deploy_all');
         });
 
+        const duplicateHeroBtn = document.getElementById('duplicateHeroBtn');
+        if (duplicateHeroBtn) {
+            duplicateHeroBtn.addEventListener('click', () => {
+                if (isExecuting) return;
+                if (isDirty) {
+                    App.toast('Note: Duplicating saved commands. Click "Save Commands" first if you want unsaved command edits included.', 'warning');
+                }
+                App.openDuplicateModal(project, (newProj, wasSaved) => {
+                    if (wasSaved && newProj && newProj.id) {
+                        syncAvailableProjectsState(newProj);
+                        if (!isDirty) {
+                            window.location.href = 'project.php?id=' + encodeURIComponent(newProj.id);
+                        } else {
+                            App.toast(`Created duplicate "${newProj.name}". Save or discard current command edits before switching projects.`, 'info', 5500);
+                        }
+                    }
+                });
+            });
+        }
+
         document.getElementById('editSshHeroBtn').addEventListener('click', () => {
             App.openProjectModal(project, async (updatedProj) => {
                 if (updatedProj) {
                     project = updatedProj;
+                    syncAvailableProjectsState(project);
                     renderHero();
                 }
                 await loadEvents();
