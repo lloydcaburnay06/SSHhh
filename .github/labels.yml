@@ -1,0 +1,35 @@
+# Standard GitHub Labels for SSHhh
+# Universal tags surfaced by GitHub's Explore & topic recommendations
+
+- name: "good first issue"
+  color: "7057ff"
+  description: "Good for newcomers to the project"
+
+- name: "help wanted"
+  color: "008672"
+  description: "Extra attention or community contribution needed"
+
+- name: "contributions: welcome"
+  color: "0e8a16"
+  description: "Community contributions and PRs are actively welcome"
+
+- name: "bug"
+  color: "d73a4a"
+  description: "Something isn't working as expected"
+
+- name: "enhancement"
+  color: "a2eeef"
+  description: "New feature or enhancement request"
+
+- name: "documentation"
+  color: "0075ca"
+  description: "Improvements or additions to documentation"
+
+- name: "security"
+  color: "e11d48"
+  description: "Security fixes, encryption vault, or TOTP improvements"
+
+- name: "ui/ux"
+  color: "d876e3"
+  description: "User interface, styling, or mobile PWA experience"
+

@@ -6,6 +6,14 @@
   <em>"Deployments so quiet, you can hear a server drop."</em>
 </p>
 
+<p align="center">
+  <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/contributions-welcome-brightgreen.svg?style=flat-square" alt="Contributions Welcome"></a>
+  <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square" alt="PRs Welcome"></a>
+  <a href="https://php.net"><img src="https://img.shields.io/badge/PHP-8.1%2B-777bb4.svg?style=flat-square&logo=php&logoColor=white" alt="PHP Version"></a>
+  <a href="manifest.webmanifest"><img src="https://img.shields.io/badge/PWA-Ready-blueviolet.svg?style=flat-square&logo=pwa&logoColor=white" alt="PWA Ready"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT"></a>
+</p>
+
 ---
 
 # SSHhh
@@ -16,23 +24,31 @@
 
 ## Features
 
-- **Multi-Project Dashboard**: Add, update, search, and filter projects across `Production`, `Staging`, `Development`, and `Testing` environments with starter pipeline presets (`Git Pull`, `PHP + Composer`, `Laravel`, `Node.js / PM2`, or custom).
+- **Multi-Project Dashboard & Priority Sorting**:
+  - Add, update, search, and filter projects across `Production`, `Staging`, `Development`, and `Testing` environments.
+  - **Drag-and-Drop Priority Sorting**: Arrange project cards into your preferred order with persistent database storage.
+  - **1-Click Project Duplication**: Clone existing projects and command pipelines with a single click to quickly spin up similar environments.
+  - **Quick Run All (`▶ Run`)**: Execute all pipeline commands directly from the dashboard card next to **Manage & Deploy**.
+- **Single-User Google Authenticator 2FA (TOTP)**:
+  - First-time interactive setup screen featuring an **offline SVG QR code** and manual secret key.
+  - **Permanent One-Time Lockout**: Once verified, the setup screen and secret key are encrypted at rest and permanently locked out.
+  - **Remember This Device**: Persistent 30-day SHA-256 hashed device cookie so you don't have to enter the 6-digit code every time you launch the app on your phone.
 - **AES-256-GCM Encrypted SSH Vault**:
   - Supports **SSH Password** and **SSH Private Key** (+ optional passphrase) authentication via pure-PHP `phpseclib/phpseclib` (no `ext-ssh2` C extension required).
   - Encrypts credentials at rest using **AES-256-GCM** + **HKDF-SHA256**, unique 96-bit IVs, and 128-bit authentication tags.
-  - Zero browser exposure: stored secrets are never sent back in HTML, JSON responses, or logs. Leaving the password field blank while editing preserves your encrypted secret; entering a new password rotates it.
+  - Zero browser exposure: stored secrets are never sent back in HTML, JSON responses, or logs.
   - 1-click **Test SSH Connection** verifies authentication, records the server's OpenSSH `SHA256` host key fingerprint, and checks the remote working directory.
-- **Inline Editable Deployment Pipeline & 1-Button Execute**:
-  - Edit step labels and multi-line shell commands directly on the **Manage Project** page, reorder steps (`↑` / `↓`), toggle `Include in Deploy All` / `Stop on error`, or insert 1-click preset steps.
-  - **1-Click `Deploy Now (Execute All)`** runs all enabled steps sequentially over a single SSH session inside the project's remote working directory (automatically saving any pending inline command edits first).
-  - **Per-Step `▶ Run`** and **Quick One-Off Command** runner for single-command execution.
+- **Card-Based Pipeline Editor & Live Streaming Terminal**:
+  - Full-width two-panel layout with independently scrollable panels on desktop and mobile.
+  - Drag-and-drop command card reordering, multi-line command editing, and presets (`Git Pull`, `Composer`, `Laravel`, `Node/PM2`).
+  - **1-Click `Deploy Now (Execute All)`** runs all enabled steps sequentially over a single SSH session.
   - **Live Streaming SSH Console** streams `stdout` + `stderr` in real time over NDJSON with ANSI color rendering.
 - **Installable PWA & Mobile Responsive**:
-  - Web App Manifest (`manifest.webmanifest`), custom `192x192` / `512x512` / maskable / Apple Touch icons, Service Worker (`sw.js`) with offline fallback (`offline.html`), and a 1-click **Install App** prompt.
-  - Touch-optimized responsive UI with notched-display safe areas (`viewport-fit=cover`), bottom-sheet mobile modals, and iOS zoom-safe inputs.
+  - Web App Manifest (`manifest.webmanifest`), custom icons, and Service Worker (`sw.js`) with offline fallback (`offline.html`).
+  - Native standalone PWA experience without address bar interference. Touch-optimized with notch safe-area handling.
 - **Complete Event & Audit Log**:
-  - Persists every full deployment (with per-step exit codes and durations), single/ad-hoc command run, SSH connection test, and project/SSH/command configuration audit change.
-  - Filter by category (`All`, `Deployments`, `Commands`, `SSH Tests`, `Config & Audit`), status, or search query, copy output, or download `.log` files.
+  - Persists every full deployment (with per-step exit codes and durations), single/ad-hoc command run, SSH connection test, and project audit change.
+  - Filter by category, copy raw output, or download `.log` files.
 
 ---
 
@@ -119,6 +135,16 @@ location ~ /(\.|composer\.(json|lock)|README\.md|SECURITY\.md|LICENSE) {
     return 403;
 }
 ```
+
+---
+
+## Contributing
+
+Contributions of all kinds are warmly welcomed! 🚀
+
+- **Found a bug or have an idea?** Open an [Issue](../../issues).
+- **Looking for a starter task?** Check out issues labeled [`good first issue`](../../issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) and [`help wanted`](../../issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22).
+- **Want to contribute code?** Read our detailed [**CONTRIBUTING.md**](CONTRIBUTING.md) guide for local environment setup, architecture overview, and PR guidelines.
 
 ---
 
