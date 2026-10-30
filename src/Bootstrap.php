@@ -42,8 +42,6 @@ final class Bootstrap
             $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
         }
 
-        AccessGuard::enforce($this->config['auth'] ?? [], $this->csrfToken());
-
         $storageDir = $rootDir . '/storage';
         if (!is_dir($storageDir)) {
             @mkdir($storageDir, 0700, true);
@@ -54,6 +52,8 @@ final class Bootstrap
         $this->logger = new EventLogger($this->database->pdo());
         $this->projects = new ProjectRepository($this->database->pdo(), $this->crypto, $this->logger);
         $this->runner = new SshRunner($this->projects, $this->logger);
+
+        AccessGuard::enforce($this->database->pdo(), $this->crypto, $this->csrfToken());
     }
 
     public static function init(): self
@@ -72,7 +72,7 @@ final class Bootstrap
 
     public function isAuthEnabled(): bool
     {
-        return AccessGuard::isAuthEnabled($this->config['auth'] ?? []);
+        return AccessGuard::isConfigured($this->database->pdo());
     }
 
     public function verifyCsrf(?string $token): void

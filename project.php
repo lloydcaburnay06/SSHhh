@@ -167,7 +167,7 @@ require __DIR__ . '/src/Views/header.php';
         'events'       => $eventsData,
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
 </script>
-<script src="assets/js/common.js?v=1.1.6"></script>
-<script src="assets/js/project.js?v=1.1.6"></script>
+<script src="assets/js/common.js?v=1.1.7"></script>
+<script src="assets/js/project.js?v=1.1.7"></script>
 </body>
 </html>

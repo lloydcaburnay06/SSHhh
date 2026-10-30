@@ -102,6 +102,10 @@
             method: 'GET',
             headers: { 'Accept': 'application/json' }
         });
+        if (res.status === 401 || res.status === 428) {
+            window.location.reload();
+            return new Promise(() => {});
+        }
         const data = await res.json();
         if (!res.ok || !data.ok) {
             throw new Error(data.error || ('Request failed with status ' + res.status));
@@ -119,6 +123,10 @@
             },
             body: JSON.stringify(body)
         });
+        if (res.status === 401 || res.status === 428) {
+            window.location.reload();
+            return new Promise(() => {});
+        }
         const data = await res.json();
         if (!res.ok || !data.ok) {
             throw new Error(data.error || ('Request failed with status ' + res.status));
@@ -135,6 +143,11 @@
             },
             body: JSON.stringify({ ...payload, stream: true })
         });
+
+        if (res.status === 401 || res.status === 428) {
+            window.location.reload();
+            return new Promise(() => {});
+        }
 
         const contentType = res.headers.get('Content-Type') || '';
         if (!res.ok || contentType.includes('application/json')) {

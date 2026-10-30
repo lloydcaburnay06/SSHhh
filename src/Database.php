@@ -52,7 +52,7 @@ final class Database
             }
         }
 
-        $markerFile = rtrim($storageDir, '/\\') . '/.schema_v2.ready';
+        $markerFile = rtrim($storageDir, '/\\') . '/.schema_v3.ready';
         if ($needsMigration || !is_file($markerFile)) {
             $this->migrate();
             @file_put_contents($markerFile, date('c'));
@@ -60,11 +60,14 @@ final class Database
             // Quick sanity check in case tables or columns were altered manually via phpMyAdmin
             $stmt = $this->pdo->query("SHOW TABLES LIKE 'event_logs'");
             $colStmt = $this->pdo->query("SHOW COLUMNS FROM `projects` LIKE 'sort_order'");
+            $authStmt = $this->pdo->query("SHOW TABLES LIKE 'auth_state'");
             if (
                 $stmt === false
                 || $stmt->fetchColumn() === false
                 || $colStmt === false
                 || $colStmt->fetch() === false
+                || $authStmt === false
+                || $authStmt->fetchColumn() === false
             ) {
                 $this->migrate();
                 @file_put_contents($markerFile, date('c'));
@@ -169,6 +172,33 @@ final class Database
                 CONSTRAINT `fk_events_project`
                     FOREIGN KEY (`project_id`) REFERENCES `projects` (`id`)
                     ON DELETE SET NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        SQL);
+
+        $this->pdo->exec(<<<'SQL'
+            CREATE TABLE IF NOT EXISTS `auth_state` (
+                `id` INT UNSIGNED NOT NULL PRIMARY KEY DEFAULT 1,
+                `totp_secret_encrypted` TEXT NULL,
+                `is_configured` TINYINT(1) NOT NULL DEFAULT 0,
+                `configured_at` DATETIME NULL,
+                `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        SQL);
+
+        $this->pdo->exec(<<<'SQL'
+            INSERT IGNORE INTO `auth_state` (`id`, `is_configured`) VALUES (1, 0);
+        SQL);
+
+        $this->pdo->exec(<<<'SQL'
+            CREATE TABLE IF NOT EXISTS `remembered_devices` (
+                `id` INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                `token_hash` VARCHAR(64) NOT NULL UNIQUE,
+                `user_agent` VARCHAR(255) NULL,
+                `ip_address` VARCHAR(60) NULL,
+                `expires_at` DATETIME NOT NULL,
+                `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                KEY `idx_expires` (`expires_at`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         SQL);
     }
