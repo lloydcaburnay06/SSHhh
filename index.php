@@ -98,6 +98,6 @@ require __DIR__ . '/src/Views/header.php';
 </script>
 <script src="assets/js/common.js?v=1.3.0"></script>
 <script src="assets/js/commands-data.js?v=1.3.0"></script>
-<script src="assets/js/dashboard.js?v=1.3.2"></script>
+<script src="assets/js/dashboard.js?v=1.3.3"></script>
 </body>
 </html>

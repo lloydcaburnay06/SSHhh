@@ -165,6 +165,65 @@ final class SshRunner
     }
 
     /**
+     * Lists subdirectories on the remote server for interactive folder browsing.
+     *
+     * @return array{current_dir: string, parent_dir: ?string, directories: list<string>}
+     */
+    public function listRemoteDirectories(int $projectId, ?string $path = null): array
+    {
+        $bundle = $this->projects->getWithDecryptedCredentials($projectId);
+        $project = $bundle['project'];
+        $remotePath = trim((string) ($path ?? $project['remote_path']));
+        if ($remotePath === '') {
+            $remotePath = '~';
+        }
+
+        $conn = $this->connect(
+            host: (string) $project['ssh_host'],
+            port: (int) $project['ssh_port'],
+            username: (string) $project['ssh_username'],
+            authType: (string) $project['ssh_auth_type'],
+            password: (string) $bundle['password'],
+            privateKey: (string) $bundle['private_key'],
+            passphrase: (string) $bundle['passphrase'],
+            timeout: max(3, min(20, (int) ($project['ssh_timeout'] ?? 10)))
+        );
+
+        /** @var SSH2 $ssh */
+        $ssh = $conn['ssh'];
+
+        try {
+            $cdTarget = $this->buildCdTarget($remotePath);
+            $cmd = "cd {$cdTarget} 2>/dev/null && pwd && ls -1 -F 2>/dev/null | grep '/$' | head -n 40";
+            $output = trim((string) $ssh->exec($cmd));
+            $lines = array_filter(array_map('trim', explode("\n", $output)), static fn($l) => $l !== '');
+            $pwd = !empty($lines) ? array_shift($lines) : $remotePath;
+            $dirs = [];
+            foreach ($lines as $line) {
+                $dirName = rtrim($line, '/');
+                if ($dirName !== '' && $dirName !== '.' && $dirName !== '..') {
+                    $dirs[] = $dirName;
+                }
+            }
+            sort($dirs);
+            $parentDir = null;
+            if ($pwd !== '/' && $pwd !== '~' && $pwd !== '') {
+                $p = dirname($pwd);
+                $parentDir = ($p !== '' && $p !== '.') ? $p : '/';
+            }
+            return [
+                'current_dir' => $pwd,
+                'parent_dir'  => $parentDir,
+                'directories' => array_values($dirs),
+            ];
+        } finally {
+            if ($ssh->isConnected()) {
+                $ssh->disconnect();
+            }
+        }
+    }
+
+    /**
      * Executes either the full enabled deployment pipeline ('deploy_all'),
      * a single saved command ('single_command'), or an ad-hoc command ('adhoc_command').
      *
@@ -176,7 +235,8 @@ final class SshRunner
         string $mode = 'deploy_all',
         ?int $commandId = null,
         ?string $adhocCommand = null,
-        ?callable $emit = null
+        ?callable $emit = null,
+        ?string $customDirectory = null
     ): array {
         @set_time_limit(0);
         @ignore_user_abort(true);
@@ -191,6 +251,9 @@ final class SshRunner
         $project = $bundle['project'];
         $projectName = (string) $project['name'];
         $remotePath = (string) $project['remote_path'];
+        if ($customDirectory !== null && trim($customDirectory) !== '') {
+            $remotePath = trim($customDirectory);
+        }
         $branch = (string) $project['repo_branch'];
         $env = (string) $project['environment'];
         $target = $this->projects->formatSshTarget(

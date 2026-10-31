@@ -134,6 +134,25 @@ try {
                 echo implode("\n", $lines);
                 exit;
 
+            case 'list_remote_dirs':
+                $projectId = (int) ($_GET['project_id'] ?? 0);
+                if ($projectId <= 0) {
+                    respondJson(['ok' => false, 'error' => 'Project ID is required.'], 422);
+                }
+                $path = isset($_GET['path']) && is_string($_GET['path']) ? trim($_GET['path']) : null;
+                try {
+                    $res = $app->runner()->listRemoteDirectories($projectId, $path);
+                    respondJson([
+                        'ok'     => true,
+                        'result' => $res,
+                    ]);
+                } catch (Throwable $e) {
+                    respondJson([
+                        'ok'    => false,
+                        'error' => $e->getMessage(),
+                    ], 400);
+                }
+
             default:
                 respondJson(['ok' => false, 'error' => 'Unknown GET action.'], 400);
         }
@@ -243,6 +262,9 @@ try {
                 ? (int) $body['step_index']
                 : null;
             $adhocCommand = isset($body['adhoc_command']) ? (string) $body['adhoc_command'] : null;
+            $customDirectory = isset($body['custom_directory']) && is_string($body['custom_directory'])
+                ? trim($body['custom_directory'])
+                : null;
 
             // Auto-save any inline command edits if passed alongside execution
             if (isset($body['commands']) && is_array($body['commands'])) {
@@ -275,7 +297,8 @@ try {
                     emit: static function (array $packet): void {
                         echo json_encode($packet, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";
                         @flush();
-                    }
+                    },
+                    customDirectory: $customDirectory
                 );
                 exit;
             }
@@ -284,13 +307,33 @@ try {
                 projectId: $projectId,
                 mode: $mode,
                 commandId: $commandId,
-                adhocCommand: $adhocCommand
+                adhocCommand: $adhocCommand,
+                customDirectory: $customDirectory
             );
 
             respondJson([
                 'ok'     => true,
                 'result' => $final,
             ]);
+
+        case 'list_remote_dirs':
+            $projectId = (int) ($body['project_id'] ?? 0);
+            if ($projectId <= 0) {
+                respondJson(['ok' => false, 'error' => 'Project ID is required.'], 422);
+            }
+            $path = isset($body['path']) && is_string($body['path']) ? trim($body['path']) : null;
+            try {
+                $res = $app->runner()->listRemoteDirectories($projectId, $path);
+                respondJson([
+                    'ok'     => true,
+                    'result' => $res,
+                ]);
+            } catch (Throwable $e) {
+                respondJson([
+                    'ok'    => false,
+                    'error' => $e->getMessage(),
+                ], 400);
+            }
 
         case 'clear_events':
             $projectId = (int) ($body['project_id'] ?? 0);

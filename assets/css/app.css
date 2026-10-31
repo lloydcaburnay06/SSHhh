@@ -2877,6 +2877,33 @@ body.app-shell > .container {
     flex-direction: column;
     gap: 10px;
     scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, 0.28) rgba(15, 23, 42, 0.4);
+}
+
+.cmddir-scroll::-webkit-scrollbar,
+.global-events-scroll::-webkit-scrollbar {
+    width: 6px;
+}
+
+.cmddir-scroll::-webkit-scrollbar-track,
+.global-events-scroll::-webkit-scrollbar-track {
+    background: rgba(15, 23, 42, 0.4);
+    border-radius: 999px;
+    margin: 4px 0;
+}
+
+.cmddir-scroll::-webkit-scrollbar-thumb,
+.global-events-scroll::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.28);
+    border-radius: 999px;
+    transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.cmddir-scroll::-webkit-scrollbar-thumb:hover,
+.global-events-scroll::-webkit-scrollbar-thumb:hover {
+    background: rgba(99, 102, 241, 0.65);
+    box-shadow: 0 0 8px rgba(99, 102, 241, 0.4);
 }
 
 .cmddir-item {
@@ -2944,9 +2971,28 @@ body.app-shell > .container {
     overflow-x: auto;
     white-space: nowrap;
     scrollbar-width: thin;
+    scrollbar-color: rgba(56, 189, 248, 0.35) transparent;
     flex: 1;
     min-width: 0;
     line-height: 1.4;
+}
+
+.cmddir-code::-webkit-scrollbar {
+    height: 4px;
+}
+
+.cmddir-code::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.cmddir-code::-webkit-scrollbar-thumb {
+    background: rgba(56, 189, 248, 0.35);
+    border-radius: 999px;
+    transition: background 0.12s ease;
+}
+
+.cmddir-code::-webkit-scrollbar-thumb:hover {
+    background: rgba(56, 189, 248, 0.7);
 }
 
 .cmddir-copy-btn {
@@ -3148,4 +3194,105 @@ body.app-shell > .container {
     overflow-y: auto;
     scrollbar-gutter: stable;
 }
+
+/* Modal Working Directory & Folder Browser */
+.exec-dir-input-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.exec-dir-input-wrap input {
+    font-family: var(--font-mono);
+    font-size: 12px;
+}
+
+.exec-dir-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 6px;
+}
+
+.dir-chip {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.12s ease;
+    user-select: none;
+}
+
+.dir-chip:hover {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    border-color: var(--border-strong);
+}
+
+.dir-chip.active {
+    background: rgba(99, 102, 241, 0.18);
+    border-color: rgba(99, 102, 241, 0.45);
+    color: #a5b4fc;
+    font-weight: 600;
+}
+
+.exec-remote-browser-box {
+    background: #070b14;
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-top: 8px;
+    animation: fadeIn 0.14s ease-out;
+}
+
+.exec-browser-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.exec-browser-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    max-height: 120px;
+    overflow-y: auto;
+    padding: 2px;
+}
+
+.browser-folder-pill {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    background: rgba(30, 41, 59, 0.7);
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    color: #94a3b8;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    transition: all 0.12s ease;
+    user-select: none;
+}
+
+.browser-folder-pill:hover {
+    background: rgba(99, 102, 241, 0.22);
+    border-color: rgba(99, 102, 241, 0.5);
+    color: #fff;
+    transform: translateY(-1px);
+}
+
+.browser-folder-pill.parent-pill {
+    color: #38bdf8;
+    border-color: rgba(56, 189, 248, 0.35);
+}
+
 

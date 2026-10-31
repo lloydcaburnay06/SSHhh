@@ -825,8 +825,15 @@
             const projectSelect = document.getElementById('execModalProjectSelect');
             const envBadge = document.getElementById('execModalEnvBadge');
             const targetHostEl = document.getElementById('execProjectTarget');
-            const targetDirEl = document.getElementById('execProjectDir');
+            const targetDefaultDirEl = document.getElementById('execProjectDefaultDir') || document.getElementById('execProjectDir');
             const prodWarningEl = document.getElementById('execProdWarning');
+            const dirInput = document.getElementById('execModalDirInput');
+            const resetDirBtn = document.getElementById('execModalResetDirBtn');
+            const browseDirsBtn = document.getElementById('execModalBrowseDirsBtn');
+            const dirChipsContainer = document.getElementById('execModalDirChips');
+            const browserBox = document.getElementById('execRemoteBrowserBox');
+            const browserList = document.getElementById('execBrowserList');
+            const browserLoading = document.getElementById('execBrowserLoading');
             const sudoToggle = document.getElementById('execModalSudoToggle');
             const cmdTextarea = document.getElementById('execModalCmdText');
             const cmdDesc = document.getElementById('execModalCmdDesc');
@@ -840,6 +847,17 @@
             const terminalTimer = document.getElementById('execTerminalTimer');
             const copyOutputBtn = document.getElementById('execCopyOutputBtn');
             const clearOutputBtn = document.getElementById('execClearOutputBtn');
+
+            function syncActiveChip(chipName) {
+                if (!dirChipsContainer) return;
+                dirChipsContainer.querySelectorAll('.dir-chip').forEach((chip) => {
+                    if (chipName && chip.dataset.dirChip === chipName) {
+                        chip.classList.add('active');
+                    } else {
+                        chip.classList.remove('active');
+                    }
+                });
+            }
 
             function populateProjectOptions() {
                 if (!projectSelect) return;
@@ -857,10 +875,10 @@
                 } else if (projects.length > 0) {
                     projectSelect.value = String(projects[0].id);
                 }
-                updateProjectContext();
+                updateProjectContext(true);
             }
 
-            function updateProjectContext() {
+            function updateProjectContext(resetDirToDefault = false) {
                 if (!projectSelect) return;
                 const pid = Number(projectSelect.value);
                 const proj = projects.find((p) => p.id === pid);
@@ -875,16 +893,180 @@
                 if (targetHostEl) {
                     targetHostEl.textContent = `${proj.ssh_username}@${proj.ssh_host}:${proj.ssh_port}`;
                 }
-                if (targetDirEl) {
-                    targetDirEl.textContent = `dir: ${proj.remote_path || '~ ($HOME)'}`;
+                const defaultDir = proj.remote_path || '~';
+                if (targetDefaultDirEl) {
+                    targetDefaultDirEl.textContent = `default: ${defaultDir}`;
+                }
+                if (dirInput && (resetDirToDefault || !dirInput.value || dirInput.dataset.userEdited !== 'true')) {
+                    dirInput.value = defaultDir;
+                    delete dirInput.dataset.userEdited;
+                    syncActiveChip('root');
                 }
                 if (prodWarningEl) {
                     prodWarningEl.style.display = (proj.environment === 'production') ? 'flex' : 'none';
                 }
+                if (browserBox && browserBox.style.display !== 'none') {
+                    loadRemoteDirs(dirInput ? dirInput.value : defaultDir);
+                }
             }
 
             if (projectSelect) {
-                projectSelect.addEventListener('change', updateProjectContext);
+                projectSelect.addEventListener('change', () => updateProjectContext(true));
+            }
+
+            // Quick folder chips
+            if (dirChipsContainer) {
+                dirChipsContainer.addEventListener('click', (e) => {
+                    const chip = e.target.closest('.dir-chip');
+                    if (!chip || !dirInput) return;
+                    const chipVal = chip.dataset.dirChip;
+                    const pid = Number(projectSelect ? projectSelect.value : 0);
+                    const proj = projects.find((p) => p.id === pid);
+                    const baseDir = (proj ? (proj.remote_path || '~') : '~').replace(/\/+$/, '');
+
+                    let newPath = baseDir;
+                    if (chipVal === 'root') {
+                        newPath = proj ? (proj.remote_path || '~') : '~';
+                        delete dirInput.dataset.userEdited;
+                    } else if (chipVal === '~') {
+                        newPath = '~';
+                        dirInput.dataset.userEdited = 'true';
+                    } else {
+                        if (baseDir === '~' || baseDir === '') {
+                            newPath = chipVal;
+                        } else {
+                            newPath = baseDir + '/' + chipVal;
+                        }
+                        dirInput.dataset.userEdited = 'true';
+                    }
+
+                    dirInput.value = newPath;
+                    syncActiveChip(chipVal);
+
+                    if (browserBox && browserBox.style.display !== 'none') {
+                        loadRemoteDirs(newPath);
+                    }
+                });
+            }
+
+            // Reset directory button
+            if (resetDirBtn) {
+                resetDirBtn.addEventListener('click', () => {
+                    const pid = Number(projectSelect ? projectSelect.value : 0);
+                    const proj = projects.find((p) => p.id === pid);
+                    const defaultPath = proj ? (proj.remote_path || '~') : '~';
+                    if (dirInput) {
+                        dirInput.value = defaultPath;
+                        delete dirInput.dataset.userEdited;
+                    }
+                    syncActiveChip('root');
+                    if (browserBox && browserBox.style.display !== 'none') {
+                        loadRemoteDirs(defaultPath);
+                    }
+                });
+            }
+
+            if (dirInput) {
+                dirInput.addEventListener('input', () => {
+                    dirInput.dataset.userEdited = 'true';
+                    syncActiveChip(null);
+                });
+            }
+
+            // Remote directory browser fetch & render
+            async function loadRemoteDirs(path) {
+                if (!browserList) return;
+                const pid = Number(projectSelect ? projectSelect.value : 0);
+                const proj = projects.find((p) => p.id === pid);
+                if (!proj) {
+                    browserList.innerHTML = '<span style="font-size:11.5px; color:var(--text-muted); padding:4px 0;">Select a target project first.</span>';
+                    return;
+                }
+
+                if (browserLoading) browserLoading.style.display = 'inline';
+                browserList.innerHTML = '<span style="font-size:11.5px; color:var(--text-muted); padding:4px 0;">Connecting &amp; querying subdirectories...</span>';
+
+                try {
+                    const res = await App.apiGet('list_remote_dirs', {
+                        project_id: proj.id,
+                        path: path || ''
+                    });
+
+                    if (!res || !res.result) {
+                        throw new Error(res && res.error ? res.error : 'Failed to query remote directory');
+                    }
+
+                    const data = res.result;
+                    const dirs = Array.isArray(data.directories) ? data.directories : [];
+                    let html = '';
+
+                    if (data.parent_dir !== null && data.parent_dir !== undefined) {
+                        html += `
+                            <button type="button" class="browser-folder-pill parent-pill" data-target-path="${App.escapeHtml(data.parent_dir)}" title="Navigate up to ${App.escapeHtml(data.parent_dir)}">
+                                <span>⬆ ..</span> <span style="opacity:0.8; font-size:11px;">(Up to ${App.escapeHtml(data.parent_dir)})</span>
+                            </button>
+                        `;
+                    }
+
+                    if (dirs.length === 0) {
+                        html += `<span style="font-size:11.5px; color:var(--text-muted); padding:4px 0;">No subdirectories found in <code>${App.escapeHtml(data.current_dir)}</code></span>`;
+                    } else {
+                        dirs.forEach((d) => {
+                            html += `
+                                <button type="button" class="browser-folder-pill" data-folder-name="${App.escapeHtml(d)}" title="Select / drill into ${App.escapeHtml(d)}">
+                                    <span>📁</span> <span>${App.escapeHtml(d)}</span>
+                                </button>
+                            `;
+                        });
+                    }
+
+                    browserList.innerHTML = html;
+                } catch (err) {
+                    browserList.innerHTML = `<span style="font-size:11.5px; color:#ef4444; padding:4px 0;">Failed to scan remote directory: ${App.escapeHtml(err.message)}</span>`;
+                } finally {
+                    if (browserLoading) browserLoading.style.display = 'none';
+                }
+            }
+
+            if (browseDirsBtn) {
+                browseDirsBtn.addEventListener('click', () => {
+                    if (!browserBox) return;
+                    const isHidden = (browserBox.style.display === 'none' || !browserBox.style.display);
+                    if (isHidden) {
+                        browserBox.style.display = 'block';
+                        browseDirsBtn.classList.add('active');
+                        loadRemoteDirs(dirInput ? dirInput.value.trim() : '');
+                    } else {
+                        browserBox.style.display = 'none';
+                        browseDirsBtn.classList.remove('active');
+                    }
+                });
+            }
+
+            if (browserList) {
+                browserList.addEventListener('click', (e) => {
+                    const btn = e.target.closest('.browser-folder-pill');
+                    if (!btn || !dirInput) return;
+
+                    if (btn.dataset.targetPath !== undefined) {
+                        const targetPath = btn.dataset.targetPath;
+                        dirInput.value = targetPath;
+                        dirInput.dataset.userEdited = 'true';
+                        syncActiveChip(null);
+                        loadRemoteDirs(targetPath);
+                        return;
+                    }
+
+                    if (btn.dataset.folderName) {
+                        const folder = btn.dataset.folderName;
+                        let cur = dirInput.value.trim().replace(/\/+$/, '');
+                        let next = (cur === '' || cur === '~') ? ('~/' + folder) : (cur + '/' + folder);
+                        dirInput.value = next;
+                        dirInput.dataset.userEdited = 'true';
+                        syncActiveChip(null);
+                        loadRemoteDirs(next);
+                    }
+                });
             }
 
             function updateSubmitButtonLabel() {
@@ -946,6 +1128,17 @@
                     } else {
                         cmdDesc.style.display = 'none';
                     }
+                }
+
+                // Reset directory state & remote browser
+                if (dirInput) {
+                    delete dirInput.dataset.userEdited;
+                }
+                if (browserBox) {
+                    browserBox.style.display = 'none';
+                }
+                if (browseDirsBtn) {
+                    browseDirsBtn.classList.remove('active');
                 }
 
                 // Reset terminal display
@@ -1036,28 +1229,32 @@
                         return;
                     }
 
-                    // If production target, prompt confirmation
-                    if (proj.environment === 'production') {
-                        const confirmed = await App.confirmAction({
-                            title: 'Execute on PRODUCTION Server?',
-                            subtitle: `${proj.name} (${proj.ssh_username}@${proj.ssh_host})`,
-                            message: `You are about to execute the following command live on your production server:`,
-                            codeSnippet: rawCmd,
-                            warning: 'Caution: This targets your live production environment. Database changes or service reloads may affect live users.',
-                            confirmText: 'Yes, Execute on Production',
-                            confirmClass: 'btn-danger',
-                            icon: '⚠️',
-                            iconVariant: 'danger',
-                        });
-                        if (!confirmed) return;
-                    }
+                    const targetDir = (dirInput ? dirInput.value.trim() : '') || proj.remote_path || '~';
+                    const isAdmin = sudoToggle && sudoToggle.checked;
+                    const isProd = proj.environment === 'production';
+
+                    // Always require explicit confirmation before remote execution
+                    const confirmed = await App.confirmAction({
+                        title: isAdmin ? 'Run Command as Admin (sudo)?' : 'Confirm Remote Execution',
+                        subtitle: `${proj.name} [${proj.environment.toUpperCase()}] • ${proj.ssh_username}@${proj.ssh_host}`,
+                        message: `You are about to execute the command below in directory <code>${App.escapeHtml(targetDir)}</code> on server <strong>${App.escapeHtml(proj.ssh_username)}@${App.escapeHtml(proj.ssh_host)}</strong>:`,
+                        codeSnippet: rawCmd,
+                        warning: isProd
+                            ? 'Caution: You are executing directly on PRODUCTION. Live user traffic or databases may be impacted.'
+                            : (isAdmin ? 'Notice: This command runs with elevated root privileges (sudo).' : null),
+                        confirmText: isAdmin ? 'Execute with sudo' : 'Execute Command',
+                        confirmClass: (isProd || isAdmin) ? 'btn-danger' : 'btn-primary',
+                        icon: isAdmin ? '⚡' : '▶',
+                        iconVariant: (isProd || isAdmin) ? 'danger' : 'deploy'
+                    });
+                    if (!confirmed) return;
 
                     execModalIsRunning = true;
                     submitBtn.disabled = true;
                     if (cancelBtn) cancelBtn.textContent = 'Close';
 
                     if (terminalWrap) terminalWrap.style.display = 'block';
-                    execModalRawOutput = `[SSH] Connecting to ${proj.ssh_username}@${proj.ssh_host}:${proj.ssh_port}...\n`;
+                    execModalRawOutput = `[SSH] Connecting to ${proj.ssh_username}@${proj.ssh_host}:${proj.ssh_port}...\n[DIR] Working directory: ${targetDir}\n`;
                     if (terminalOutput) {
                         terminalOutput.innerHTML = App.ansiToHtml(execModalRawOutput);
                     }
@@ -1078,7 +1275,8 @@
                         const finalPacket = await App.streamExecute({
                             project_id: proj.id,
                             mode: 'adhoc_command',
-                            adhoc_command: rawCmd
+                            adhoc_command: rawCmd,
+                            custom_directory: targetDir
                         }, (pkt) => {
                             switch (pkt.type) {
                                 case 'init':
