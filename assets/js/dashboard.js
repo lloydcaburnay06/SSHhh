@@ -16,17 +16,7 @@
     let execModalRawOutput = '';
 
     function updateStats(stats) {
-        if (!stats) return;
-        const totalProjEl = document.getElementById('statTotalProjects');
-        if (totalProjEl) totalProjEl.textContent = stats.total_projects ?? 0;
-        const downProjEl = document.getElementById('statDownProjects');
-        if (downProjEl) downProjEl.textContent = stats.down_projects ?? 0;
-        const totalDepEl = document.getElementById('statTotalDeploys');
-        if (totalDepEl) totalDepEl.textContent = stats.total_deployments ?? 0;
-        const succDepEl = document.getElementById('statSuccessDeploys');
-        if (succDepEl) succDepEl.textContent = stats.successful_deployments ?? 0;
-        const failDepEl = document.getElementById('statFailedDeploys');
-        if (failDepEl) failDepEl.textContent = stats.failed_deployments ?? 0;
+        // Counter cards removed from index dashboard per user request
     }
 
     function renderProjects() {
@@ -41,10 +31,6 @@
         const downPill = document.querySelector('#envFilterPills [data-env="app-down"]');
         if (downPill) {
             downPill.classList.toggle('has-down', downCount > 0);
-        }
-        const statDownProjectsEl = document.getElementById('statDownProjects');
-        if (statDownProjectsEl) {
-            statDownProjectsEl.textContent = downCount;
         }
 
         const filtered = projects.filter((p) => {

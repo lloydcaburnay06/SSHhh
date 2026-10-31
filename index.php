@@ -25,29 +25,6 @@ require __DIR__ . '/src/Views/header.php';
     <div class="dashboard-layout">
         <!-- Left Side: Project Content Area -->
         <div class="dashboard-main">
-            <section class="stats-grid">
-                <div class="stat-card">
-                    <span class="stat-label">Managed Projects</span>
-                    <span class="stat-value indigo" id="statTotalProjects"><?= (int) $initialStats['total_projects'] ?></span>
-                </div>
-                <div class="stat-card">
-                    <span class="stat-label">Apps Down</span>
-                    <span class="stat-value rose" id="statDownProjects"><?= (int) ($initialStats['down_projects'] ?? 0) ?></span>
-                </div>
-                <div class="stat-card">
-                    <span class="stat-label">Total Deployments</span>
-                    <span class="stat-value" id="statTotalDeploys"><?= (int) $initialStats['total_deployments'] ?></span>
-                </div>
-                <div class="stat-card">
-                    <span class="stat-label">Successful Runs</span>
-                    <span class="stat-value emerald" id="statSuccessDeploys"><?= (int) $initialStats['successful_deployments'] ?></span>
-                </div>
-                <div class="stat-card">
-                    <span class="stat-label">Failed Runs</span>
-                    <span class="stat-value rose" id="statFailedDeploys"><?= (int) $initialStats['failed_deployments'] ?></span>
-                </div>
-            </section>
-
             <section class="toolbar">
                 <div class="toolbar-left">
                     <input type="search" class="search-input" id="projectSearchInput" placeholder="Search projects, SSH hosts, paths...">
@@ -121,6 +98,6 @@ require __DIR__ . '/src/Views/header.php';
 </script>
 <script src="assets/js/common.js?v=1.3.0"></script>
 <script src="assets/js/commands-data.js?v=1.3.0"></script>
-<script src="assets/js/dashboard.js?v=1.3.0"></script>
+<script src="assets/js/dashboard.js?v=1.3.2"></script>
 </body>
 </html>
