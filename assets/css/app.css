@@ -3295,4 +3295,58 @@ body.app-shell > .container {
     border-color: rgba(56, 189, 248, 0.35);
 }
 
+/* ==========================================================================
+   Server Pulse, Remote .env, Releases & Deployment Automation V1.4
+   ========================================================================== */
+
+@keyframes pulseSpin {
+    0% { transform: scale(1) rotate(0deg); opacity: 0.8; }
+    50% { transform: scale(1.15) rotate(180deg); opacity: 1; }
+    100% { transform: scale(1) rotate(360deg); opacity: 0.8; }
+}
+
+.pulse-spinner {
+    display: inline-block;
+    animation: pulseSpin 1.6s ease-in-out infinite;
+}
+
+.server-pulse-modal {
+    max-width: 680px;
+    width: 92%;
+}
+
+.remote-env-modal {
+    max-width: 760px;
+    width: 92%;
+}
+
+.releases-modal {
+    max-width: 680px;
+    width: 92%;
+}
+
+.preset-chip-down {
+    background: rgba(239, 68, 68, 0.12) !important;
+    border-color: rgba(239, 68, 68, 0.35) !important;
+    color: #fca5a5 !important;
+}
+
+.preset-chip-down:hover {
+    background: rgba(239, 68, 68, 0.22) !important;
+    border-color: rgba(239, 68, 68, 0.55) !important;
+    color: #fee2e2 !important;
+}
+
+.preset-chip-up {
+    background: rgba(16, 185, 129, 0.12) !important;
+    border-color: rgba(16, 185, 129, 0.35) !important;
+    color: #6ee7b7 !important;
+}
+
+.preset-chip-up:hover {
+    background: rgba(16, 185, 129, 0.22) !important;
+    border-color: rgba(16, 185, 129, 0.55) !important;
+    color: #a7f3d0 !important;
+}
+
 

@@ -240,6 +240,12 @@
         document.getElementById('testSshHeroBtn').disabled = locked;
         const dupBtn = document.getElementById('duplicateHeroBtn');
         if (dupBtn) dupBtn.disabled = locked;
+        const pulseBtn = document.getElementById('pulseHeroBtn');
+        if (pulseBtn) pulseBtn.disabled = locked;
+        const envBtn = document.getElementById('envHeroBtn');
+        if (envBtn) envBtn.disabled = locked;
+        const relBtn = document.getElementById('releasesHeroBtn');
+        if (relBtn) relBtn.disabled = locked;
         document.getElementById('runAdhocBtn').disabled = locked;
         document.getElementById('consoleStateBadge').innerHTML = statusHtml;
         renderCommands();
@@ -543,6 +549,32 @@
                             App.toast(`Created duplicate "${newProj.name}". Save or discard current command edits before switching projects.`, 'info', 5500);
                         }
                     }
+                });
+            });
+        }
+
+        const pulseHeroBtn = document.getElementById('pulseHeroBtn');
+        if (pulseHeroBtn) {
+            pulseHeroBtn.addEventListener('click', () => {
+                if (isExecuting) return;
+                App.openServerPulseModal(project);
+            });
+        }
+
+        const envHeroBtn = document.getElementById('envHeroBtn');
+        if (envHeroBtn) {
+            envHeroBtn.addEventListener('click', () => {
+                if (isExecuting) return;
+                App.openRemoteEnvModal(project);
+            });
+        }
+
+        const releasesHeroBtn = document.getElementById('releasesHeroBtn');
+        if (releasesHeroBtn) {
+            releasesHeroBtn.addEventListener('click', () => {
+                if (isExecuting) return;
+                App.openReleasesModal(project, async () => {
+                    await loadEvents();
                 });
             });
         }

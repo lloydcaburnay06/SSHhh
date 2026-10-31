@@ -139,6 +139,78 @@
                 </div>
 
                 <div class="ssh-test-banner" id="modalSshTestBanner"></div>
+
+                <!-- Advanced Deployment & Automation Options -->
+                <div class="form-section-title" style="margin-top:20px;">Deployment Strategy &amp; Automation</div>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label for="proj_deploy_strategy">Deployment Strategy</label>
+                        <select class="form-select" id="proj_deploy_strategy">
+                            <option value="direct">Direct Path (Standard `cd &lt;remote_path&gt;`)</option>
+                            <option value="symlink">Atomic Zero-Downtime (releases/ &bull; current symlink)</option>
+                        </select>
+                        <span class="form-hint">Atomic mode prepares releases in timestamped folders and flips a symlink for 0 downtime.</span>
+                    </div>
+
+                    <div class="form-group" id="projReleasesToKeepWrap">
+                        <label for="proj_releases_to_keep">Releases to Keep</label>
+                        <input type="number" class="form-control" id="proj_releases_to_keep" min="2" max="30" value="5">
+                        <span class="form-hint">Older releases are automatically pruned after successful deploys.</span>
+                    </div>
+
+                    <div class="form-group full" style="padding:12px; background:var(--bg-elevated); border:1px solid var(--border-color); border-radius:8px;">
+                        <label class="toggle-label" for="proj_backup_db_before_deploy" style="margin-bottom:6px; color:var(--text-primary); font-weight:600;">
+                            <input type="checkbox" id="proj_backup_db_before_deploy">
+                            <span>🛡️ Automated Pre-Deploy Database Snapshot</span>
+                        </label>
+                        <span class="form-hint" style="margin-bottom:10px; display:block;">Creates a compressed SQL dump in <code>storage/backups/</code> before running deployment migrations.</span>
+                        <div id="backupDriverWrap" style="display:none; max-width:260px;">
+                            <label for="proj_backup_db_driver" style="font-size:11.5px; margin-bottom:4px;">Database Driver</label>
+                            <select class="form-select form-select-sm" id="proj_backup_db_driver">
+                                <option value="auto">Auto-detect from .env</option>
+                                <option value="mysql">MySQL / MariaDB</option>
+                                <option value="postgres">PostgreSQL</option>
+                                <option value="sqlite">SQLite</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-group full">
+                        <label for="proj_health_check_url">
+                            <span>Post-Deploy Health Check URL</span>
+                            <span id="projHealthBadge" class="badge" style="display:none; margin-left:6px;"></span>
+                        </label>
+                        <div style="display:flex; gap:8px;">
+                            <input type="url" class="form-control" id="proj_health_check_url" placeholder="https://app.example.com/up or /api/health">
+                            <button type="button" class="btn btn-secondary btn-sm" id="projTestHealthBtn" style="white-space:nowrap;">Test Ping</button>
+                        </div>
+                        <span class="form-hint">Pings this URL immediately after deployment. Returns verified green if HTTP 200 OK.</span>
+                    </div>
+
+                    <div class="form-group full" style="padding:12px; background:var(--bg-elevated); border:1px solid var(--border-color); border-radius:8px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                            <label class="toggle-label" for="proj_webhook_enabled" style="margin-bottom:0; color:var(--text-primary); font-weight:600;">
+                                <input type="checkbox" id="proj_webhook_enabled">
+                                <span>🚀 Git Push Webhook ("Push to Deploy")</span>
+                            </label>
+                        </div>
+                        <span class="form-hint" style="margin-bottom:10px; display:block;">Trigger this project's deployment pipeline automatically whenever you push to GitHub, GitLab, or Bitbucket.</span>
+                        <div id="webhookDetailsWrap" style="display:none;">
+                            <div style="margin-bottom:8px;">
+                                <label for="proj_webhook_branch" style="font-size:11.5px; margin-bottom:4px;">Target Webhook Branch</label>
+                                <input type="text" class="form-control form-control-sm" id="proj_webhook_branch" value="main" placeholder="main" style="max-width:240px;">
+                            </div>
+                            <div>
+                                <label style="font-size:11.5px; margin-bottom:4px;">Webhook Payload URL</label>
+                                <div style="display:flex; gap:8px;">
+                                    <input type="text" class="form-control form-control-sm" id="projWebhookUrl" readonly style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-secondary);">
+                                    <button type="button" class="btn btn-secondary btn-xs" id="copyWebhookUrlBtn" style="white-space:nowrap;">📋 Copy</button>
+                                    <button type="button" class="btn btn-ghost btn-xs" id="regenWebhookTokenBtn" title="Regenerate secret token" style="white-space:nowrap;">🔄 New Token</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" id="modalTestSshBtn">

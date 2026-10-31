@@ -102,6 +102,26 @@
                     ? `<span class="badge badge-up">&#9679; App Up</span>`
                     : '');
 
+            const healthBadgeHtml = p.health_check_url ? (
+                p.last_health_status === 'healthy'
+                    ? `<span class="badge badge-up" title="Health URL verified: ${App.escapeHtml(p.health_check_url)}">🟢 Health OK (${p.last_health_response_code || 200})</span>`
+                    : (p.last_health_status === 'unhealthy'
+                        ? `<span class="badge badge-down" title="Health URL alert: ${App.escapeHtml(p.health_check_url)}">🔴 Health Err (${p.last_health_response_code || 'Fail'})</span>`
+                        : `<span class="badge" style="opacity:0.75;" title="Health URL: ${App.escapeHtml(p.health_check_url)}">⚪ Health</span>`)
+            ) : '';
+
+            const strategyBadgeHtml = (p.deploy_strategy === 'symlink')
+                ? `<span class="badge" style="background:rgba(99,102,241,0.15); color:#a5b4fc; border:1px solid rgba(99,102,241,0.3);" title="Atomic Zero-Downtime Releases">🔄 Zero-Downtime</span>`
+                : '';
+
+            const webhookBadgeHtml = p.webhook_enabled
+                ? `<span class="badge" style="background:rgba(52,211,153,0.15); color:#6ee7b7; border:1px solid rgba(52,211,153,0.3);" title="Push-to-deploy webhook enabled on branch '${App.escapeHtml(p.webhook_branch || 'main')}">🚀 Push-to-Deploy</span>`
+                : '';
+
+            const backupBadgeHtml = p.backup_db_before_deploy
+                ? `<span class="badge" style="background:rgba(245,158,11,0.15); color:#fde68a; border:1px solid rgba(245,158,11,0.3);" title="Pre-deploy database snapshot enabled">🛡️ Auto DB Backup</span>`
+                : '';
+
             return `
                 <article class="project-card ${isDown ? 'app-down' : ''}" data-project-id="${p.id}">
                     ${downStripHtml}
@@ -124,6 +144,10 @@
                         </div>
                         <div class="project-card-badges">
                             ${appBadgeHtml}
+                            ${healthBadgeHtml}
+                            ${strategyBadgeHtml}
+                            ${webhookBadgeHtml}
+                            ${backupBadgeHtml}
                             <span class="badge env-${App.escapeHtml(p.environment)}">${App.escapeHtml(p.environment)}</span>
                         </div>
                     </div>
@@ -175,6 +199,9 @@
                     <div class="project-card-footer">
                         <div class="card-actions-left">
                             <button type="button" class="btn btn-ghost btn-sm" data-action="edit" data-id="${p.id}">Edit</button>
+                            <button type="button" class="btn btn-ghost btn-sm" data-action="pulse" data-id="${p.id}" title="Inspect live CPU, RAM, Disk &amp; Services">🩺 Pulse</button>
+                            <button type="button" class="btn btn-ghost btn-sm" data-action="env" data-id="${p.id}" title="Directly inspect &amp; edit remote .env">📝 .env</button>
+                            <button type="button" class="btn btn-ghost btn-sm" data-action="releases" data-id="${p.id}" title="View historical releases &amp; 1-click rollback">⏪ Releases</button>
                             <button type="button" class="btn btn-ghost btn-sm" data-action="duplicate" data-id="${p.id}" title="Duplicate project &amp; command template">Duplicate</button>
                             <button type="button" class="btn btn-ghost btn-sm" data-action="ssh" data-id="${p.id}">SSH Settings</button>
                             <button type="button" class="btn btn-ghost btn-sm" data-action="test-ssh" data-id="${p.id}">Test SSH</button>
@@ -588,6 +615,12 @@
                 }
             } else if (action === 'edit') {
                 App.openProjectModal(project, async () => refreshAll(), false);
+            } else if (action === 'pulse') {
+                App.openServerPulseModal(project);
+            } else if (action === 'env') {
+                App.openRemoteEnvModal(project);
+            } else if (action === 'releases') {
+                App.openReleasesModal(project, refreshAll);
             } else if (action === 'duplicate') {
                 App.openDuplicateModal(project, async (savedProject, wasSaved) => {
                     if (wasSaved && savedProject) {

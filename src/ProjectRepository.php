@@ -266,7 +266,17 @@ final class ProjectRepository
                     `ssh_private_key_encrypted`,
                     `ssh_passphrase_encrypted`,
                     `ssh_timeout`,
-                    `command_timeout`
+                    `command_timeout`,
+                    `health_check_url`,
+                    `backup_db_before_deploy`,
+                    `backup_db_driver`,
+                    `webhook_enabled`,
+                    `webhook_token`,
+                    `webhook_branch`,
+                    `deploy_strategy`,
+                    `releases_to_keep`,
+                    `shared_dirs`,
+                    `shared_files`
                 ) VALUES (
                     :name,
                     :environment,
@@ -282,9 +292,21 @@ final class ProjectRepository
                     :ssh_private_key_encrypted,
                     :ssh_passphrase_encrypted,
                     :ssh_timeout,
-                    :command_timeout
+                    :command_timeout,
+                    :health_check_url,
+                    :backup_db_before_deploy,
+                    :backup_db_driver,
+                    :webhook_enabled,
+                    :webhook_token,
+                    :webhook_branch,
+                    :deploy_strategy,
+                    :releases_to_keep,
+                    :shared_dirs,
+                    :shared_files
                 )
             SQL);
+
+            $webhookToken = bin2hex(random_bytes(24));
 
             $stmt->execute([
                 ':name'                     => $data['name'],
@@ -302,6 +324,16 @@ final class ProjectRepository
                 ':ssh_passphrase_encrypted' => $passphraseEnc,
                 ':ssh_timeout'              => $data['ssh_timeout'],
                 ':command_timeout'          => $data['command_timeout'],
+                ':health_check_url'         => $data['health_check_url'],
+                ':backup_db_before_deploy'  => $data['backup_db_before_deploy'],
+                ':backup_db_driver'         => $data['backup_db_driver'],
+                ':webhook_enabled'          => $data['webhook_enabled'],
+                ':webhook_token'            => $webhookToken,
+                ':webhook_branch'           => $data['webhook_branch'],
+                ':deploy_strategy'          => $data['deploy_strategy'],
+                ':releases_to_keep'         => $data['releases_to_keep'],
+                ':shared_dirs'              => $data['shared_dirs'],
+                ':shared_files'             => $data['shared_files'],
             ]);
 
             $projectId = (int) $this->pdo->lastInsertId();
@@ -415,20 +447,29 @@ final class ProjectRepository
 
         // Allow partial updates (e.g. updating SSH settings only or project info only)
         $mergedInput = [
-            'name'            => $input['name'] ?? $existing['name'],
-            'environment'     => $input['environment'] ?? $existing['environment'],
-            'description'     => array_key_exists('description', $input) ? $input['description'] : $existing['description'],
-            'repo_branch'     => $input['repo_branch'] ?? $existing['repo_branch'],
-            'remote_path'     => array_key_exists('remote_path', $input) ? $input['remote_path'] : $existing['remote_path'],
-            'ssh_host'        => $input['ssh_host'] ?? $existing['ssh_host'],
-            'ssh_port'        => $input['ssh_port'] ?? $existing['ssh_port'],
-            'ssh_username'    => $input['ssh_username'] ?? $existing['ssh_username'],
-            'ssh_auth_type'   => $input['ssh_auth_type'] ?? $existing['ssh_auth_type'],
-            'ssh_timeout'     => $input['ssh_timeout'] ?? $existing['ssh_timeout'],
-            'command_timeout' => $input['command_timeout'] ?? $existing['command_timeout'],
-            'ssh_password'    => $input['ssh_password'] ?? '',
-            'ssh_private_key' => $input['ssh_private_key'] ?? '',
-            'ssh_passphrase'  => $input['ssh_passphrase'] ?? '',
+            'name'                    => $input['name'] ?? $existing['name'],
+            'environment'             => $input['environment'] ?? $existing['environment'],
+            'description'             => array_key_exists('description', $input) ? $input['description'] : $existing['description'],
+            'repo_branch'             => $input['repo_branch'] ?? $existing['repo_branch'],
+            'remote_path'             => array_key_exists('remote_path', $input) ? $input['remote_path'] : $existing['remote_path'],
+            'ssh_host'                => $input['ssh_host'] ?? $existing['ssh_host'],
+            'ssh_port'                => $input['ssh_port'] ?? $existing['ssh_port'],
+            'ssh_username'            => $input['ssh_username'] ?? $existing['ssh_username'],
+            'ssh_auth_type'           => $input['ssh_auth_type'] ?? $existing['ssh_auth_type'],
+            'ssh_timeout'             => $input['ssh_timeout'] ?? $existing['ssh_timeout'],
+            'command_timeout'         => $input['command_timeout'] ?? $existing['command_timeout'],
+            'ssh_password'            => $input['ssh_password'] ?? '',
+            'ssh_private_key'         => $input['ssh_private_key'] ?? '',
+            'ssh_passphrase'          => $input['ssh_passphrase'] ?? '',
+            'health_check_url'        => array_key_exists('health_check_url', $input) ? $input['health_check_url'] : $existing['health_check_url'],
+            'backup_db_before_deploy' => array_key_exists('backup_db_before_deploy', $input) ? $input['backup_db_before_deploy'] : $existing['backup_db_before_deploy'],
+            'backup_db_driver'        => $input['backup_db_driver'] ?? ($existing['backup_db_driver'] ?? 'auto'),
+            'webhook_enabled'         => array_key_exists('webhook_enabled', $input) ? $input['webhook_enabled'] : $existing['webhook_enabled'],
+            'webhook_branch'          => $input['webhook_branch'] ?? ($existing['webhook_branch'] ?? 'main'),
+            'deploy_strategy'         => $input['deploy_strategy'] ?? ($existing['deploy_strategy'] ?? 'direct'),
+            'releases_to_keep'        => $input['releases_to_keep'] ?? ($existing['releases_to_keep'] ?? 5),
+            'shared_dirs'             => array_key_exists('shared_dirs', $input) ? $input['shared_dirs'] : ($existing['shared_dirs'] ?? 'storage'),
+            'shared_files'            => array_key_exists('shared_files', $input) ? $input['shared_files'] : ($existing['shared_files'] ?? '.env'),
         ];
 
         $data = $this->validateProjectInput($mergedInput, false);
@@ -482,7 +523,16 @@ final class ProjectRepository
                 `ssh_passphrase_encrypted` = :ssh_passphrase_encrypted,
                 `ssh_timeout` = :ssh_timeout,
                 `command_timeout` = :command_timeout,
-                `host_fingerprint` = :host_fingerprint
+                `host_fingerprint` = :host_fingerprint,
+                `health_check_url` = :health_check_url,
+                `backup_db_before_deploy` = :backup_db_before_deploy,
+                `backup_db_driver` = :backup_db_driver,
+                `webhook_enabled` = :webhook_enabled,
+                `webhook_branch` = :webhook_branch,
+                `deploy_strategy` = :deploy_strategy,
+                `releases_to_keep` = :releases_to_keep,
+                `shared_dirs` = :shared_dirs,
+                `shared_files` = :shared_files
             WHERE `id` = :id
         SQL);
 
@@ -502,6 +552,15 @@ final class ProjectRepository
             ':ssh_timeout'               => $data['ssh_timeout'],
             ':command_timeout'           => $data['command_timeout'],
             ':host_fingerprint'          => $fingerprint,
+            ':health_check_url'         => $data['health_check_url'],
+            ':backup_db_before_deploy'  => $data['backup_db_before_deploy'],
+            ':backup_db_driver'         => $data['backup_db_driver'],
+            ':webhook_enabled'          => $data['webhook_enabled'],
+            ':webhook_branch'           => $data['webhook_branch'],
+            ':deploy_strategy'          => $data['deploy_strategy'],
+            ':releases_to_keep'         => $data['releases_to_keep'],
+            ':shared_dirs'              => $data['shared_dirs'],
+            ':shared_files'             => $data['shared_files'],
             ':id'                        => $id,
         ]);
 
@@ -868,6 +927,48 @@ final class ProjectRepository
         $stmt->execute([':fp' => mb_substr($fingerprint, 0, 255), ':id' => $projectId]);
     }
 
+    public function regenerateWebhookToken(int $projectId): string
+    {
+        $token = bin2hex(random_bytes(24));
+        $stmt = $this->pdo->prepare('UPDATE `projects` SET `webhook_token` = :token WHERE `id` = :id');
+        $stmt->execute([':token' => $token, ':id' => $projectId]);
+        return $token;
+    }
+
+    public function findByWebhookToken(string $token): ?array
+    {
+        $token = trim($token);
+        if ($token === '') {
+            return null;
+        }
+        $stmt = $this->pdo->prepare('SELECT * FROM `projects` WHERE `webhook_token` = :token LIMIT 1');
+        $stmt->execute([':token' => $token]);
+        $row = $stmt->fetch();
+        return $row ? $this->sanitizeProjectRow($row) : null;
+    }
+
+    public function updateHealthStatus(int $projectId, string $status, ?int $responseCode = null): void
+    {
+        $stmt = $this->pdo->prepare(<<<'SQL'
+            UPDATE `projects` SET
+                `last_health_status` = :status,
+                `last_health_checked_at` = NOW(),
+                `last_health_response_code` = :code
+            WHERE `id` = :id
+        SQL);
+        $stmt->execute([
+            ':status' => in_array($status, ['healthy', 'unhealthy', 'unknown'], true) ? $status : 'unknown',
+            ':code'   => $responseCode,
+            ':id'     => $projectId,
+        ]);
+    }
+
+    public function updateCurrentRelease(int $projectId, string $releaseId): void
+    {
+        $stmt = $this->pdo->prepare('UPDATE `projects` SET `current_release_id` = :rel WHERE `id` = :id');
+        $stmt->execute([':rel' => mb_substr($releaseId, 0, 60), ':id' => $projectId]);
+    }
+
     public function formatSshTarget(string $user, string $host, int $port, string $path = ''): string
     {
         $base = sprintf('%s@%s:%d', $user, $host, $port);
@@ -931,21 +1032,53 @@ final class ProjectRepository
             throw new InvalidArgumentException('SSH Private Key is required for key authentication.');
         }
 
+        $healthCheckUrl = trim((string) ($input['health_check_url'] ?? ''));
+        if ($healthCheckUrl !== '' && !preg_match('#^https?://#i', $healthCheckUrl)) {
+            throw new InvalidArgumentException('Health Check URL must start with http:// or https://');
+        }
+
+        $backupDb = !empty($input['backup_db_before_deploy']) ? 1 : 0;
+        $dbDriver = strtolower(trim((string) ($input['backup_db_driver'] ?? 'auto')));
+        if (!in_array($dbDriver, ['auto', 'mysql', 'postgres', 'sqlite'], true)) {
+            $dbDriver = 'auto';
+        }
+
+        $webhookEnabled = !empty($input['webhook_enabled']) ? 1 : 0;
+        $webhookBranch = trim((string) ($input['webhook_branch'] ?? 'main')) ?: 'main';
+
+        $deployStrategy = strtolower(trim((string) ($input['deploy_strategy'] ?? 'direct')));
+        if (!in_array($deployStrategy, ['direct', 'symlink'], true)) {
+            $deployStrategy = 'direct';
+        }
+
+        $releasesToKeep = max(2, min(30, (int) ($input['releases_to_keep'] ?? 5)));
+        $sharedDirs = trim((string) ($input['shared_dirs'] ?? 'storage')) ?: 'storage';
+        $sharedFiles = trim((string) ($input['shared_files'] ?? '.env')) ?: '.env';
+
         return [
-            'name'            => mb_substr($name, 0, 150),
-            'environment'     => $env,
-            'description'     => $description !== '' ? $description : null,
-            'repo_branch'     => mb_substr($branch, 0, 120),
-            'remote_path'     => mb_substr($remotePath, 0, 500),
-            'ssh_host'        => mb_substr($sshHost, 0, 255),
-            'ssh_port'        => $sshPort,
-            'ssh_username'    => mb_substr($sshUser, 0, 120),
-            'ssh_auth_type'   => $authType,
-            'ssh_password'    => $password,
-            'ssh_private_key' => $privateKey,
-            'ssh_passphrase'  => $passphrase,
-            'ssh_timeout'     => $sshTimeout,
-            'command_timeout' => $commandTimeout,
+            'name'                    => mb_substr($name, 0, 150),
+            'environment'             => $env,
+            'description'             => $description !== '' ? $description : null,
+            'repo_branch'             => mb_substr($branch, 0, 120),
+            'remote_path'             => mb_substr($remotePath, 0, 500),
+            'ssh_host'                => mb_substr($sshHost, 0, 255),
+            'ssh_port'                => $sshPort,
+            'ssh_username'            => mb_substr($sshUser, 0, 120),
+            'ssh_auth_type'           => $authType,
+            'ssh_password'            => $password,
+            'ssh_private_key'         => $privateKey,
+            'ssh_passphrase'          => $passphrase,
+            'ssh_timeout'             => $sshTimeout,
+            'command_timeout'         => $commandTimeout,
+            'health_check_url'        => $healthCheckUrl !== '' ? mb_substr($healthCheckUrl, 0, 500) : null,
+            'backup_db_before_deploy' => $backupDb,
+            'backup_db_driver'        => $dbDriver,
+            'webhook_enabled'         => $webhookEnabled,
+            'webhook_branch'          => mb_substr($webhookBranch, 0, 120),
+            'deploy_strategy'         => $deployStrategy,
+            'releases_to_keep'        => $releasesToKeep,
+            'shared_dirs'             => $sharedDirs,
+            'shared_files'            => $sharedFiles,
         ];
     }
 
@@ -979,6 +1112,22 @@ final class ProjectRepository
         $row['has_passphrase'] = $hasPassphrase;
         $row['app_status'] = (string) ($row['app_status'] ?? 'unknown');
         $row['app_status_updated_at'] = $row['app_status_updated_at'] ?? null;
+        $row['health_check_url'] = !empty($row['health_check_url']) ? (string) $row['health_check_url'] : null;
+        $row['last_health_status'] = (string) ($row['last_health_status'] ?? 'unknown');
+        $row['last_health_checked_at'] = $row['last_health_checked_at'] ?? null;
+        $row['last_health_response_code'] = isset($row['last_health_response_code']) && $row['last_health_response_code'] !== null
+            ? (int) $row['last_health_response_code']
+            : null;
+        $row['backup_db_before_deploy'] = !empty($row['backup_db_before_deploy']) ? 1 : 0;
+        $row['backup_db_driver'] = (string) ($row['backup_db_driver'] ?? 'auto');
+        $row['webhook_enabled'] = !empty($row['webhook_enabled']) ? 1 : 0;
+        $row['webhook_token'] = (string) ($row['webhook_token'] ?? '');
+        $row['webhook_branch'] = (string) ($row['webhook_branch'] ?? 'main');
+        $row['deploy_strategy'] = in_array($row['deploy_strategy'] ?? '', ['direct', 'symlink'], true) ? (string) $row['deploy_strategy'] : 'direct';
+        $row['releases_to_keep'] = isset($row['releases_to_keep']) ? (int) $row['releases_to_keep'] : 5;
+        $row['shared_dirs'] = (string) ($row['shared_dirs'] ?? 'storage');
+        $row['shared_files'] = (string) ($row['shared_files'] ?? '.env');
+        $row['current_release_id'] = $row['current_release_id'] ?? null;
 
         return $row;
     }

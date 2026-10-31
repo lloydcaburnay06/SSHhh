@@ -88,6 +88,9 @@ require __DIR__ . '/src/Views/header.php';
 
 <?php require __DIR__ . '/src/Views/project_modal.php'; ?>
 <?php require __DIR__ . '/src/Views/command_run_modal.php'; ?>
+<?php require __DIR__ . '/src/Views/server_pulse_modal.php'; ?>
+<?php require __DIR__ . '/src/Views/env_modal.php'; ?>
+<?php require __DIR__ . '/src/Views/rollback_modal.php'; ?>
 
 <script>
     window.INITIAL_DASHBOARD_DATA = <?= json_encode([
@@ -96,8 +99,8 @@ require __DIR__ . '/src/Views/header.php';
         'events'   => $recentEvents['items'],
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
 </script>
-<script src="assets/js/common.js?v=1.3.0"></script>
-<script src="assets/js/commands-data.js?v=1.3.0"></script>
-<script src="assets/js/dashboard.js?v=1.3.3"></script>
+<script src="assets/js/common.js?v=1.4.0"></script>
+<script src="assets/js/commands-data.js?v=1.4.0"></script>
+<script src="assets/js/dashboard.js?v=1.4.0"></script>
 </body>
 </html>

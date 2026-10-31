@@ -51,6 +51,18 @@ require __DIR__ . '/src/Views/header.php';
                     <div class="hero-chips" id="heroChips"></div>
                 </div>
                 <div class="hero-actions">
+                    <button type="button" class="btn btn-secondary" id="pulseHeroBtn" title="Inspect live CPU, RAM, Disk and Services">
+                        <span>🩺</span>
+                        <span>Pulse</span>
+                    </button>
+                    <button type="button" class="btn btn-secondary" id="envHeroBtn" title="Directly inspect &amp; edit remote .env">
+                        <span>📝</span>
+                        <span>.env</span>
+                    </button>
+                    <button type="button" class="btn btn-secondary" id="releasesHeroBtn" title="View historical releases &amp; 1-click rollback">
+                        <span>⏪</span>
+                        <span>Releases</span>
+                    </button>
                     <button type="button" class="btn btn-secondary" id="duplicateHeroBtn" title="Duplicate this project and its command template">
                         <span>&#128203;</span>
                         <span>Duplicate</span>
@@ -94,6 +106,9 @@ require __DIR__ . '/src/Views/header.php';
                         <button type="button" class="preset-chip" data-name="Build frontend assets" data-cmd="npm ci && npm run build">+ npm build</button>
                         <button type="button" class="preset-chip" data-name="Run Laravel migrations" data-cmd="php artisan migrate --force">+ artisan migrate</button>
                         <button type="button" class="preset-chip" data-name="Optimize caches" data-cmd="php artisan optimize">+ artisan optimize</button>
+                        <button type="button" class="preset-chip" data-name="Clear application cache" data-cmd="php artisan optimize:clear">+ optimize:clear</button>
+                        <button type="button" class="preset-chip" data-name="Restart queue workers" data-cmd="php artisan queue:restart">+ queue:restart</button>
+                        <button type="button" class="preset-chip" data-name="Check failed queue jobs" data-cmd="php artisan queue:failed">+ queue:failed</button>
                         <button type="button" class="preset-chip" data-name="Reload PM2" data-cmd="pm2 reload all">+ pm2 reload</button>
                     </div>
 
@@ -164,6 +179,9 @@ require __DIR__ . '/src/Views/header.php';
 </main>
 
 <?php require __DIR__ . '/src/Views/project_modal.php'; ?>
+<?php require __DIR__ . '/src/Views/server_pulse_modal.php'; ?>
+<?php require __DIR__ . '/src/Views/env_modal.php'; ?>
+<?php require __DIR__ . '/src/Views/rollback_modal.php'; ?>
 
 <script>
     window.INITIAL_PROJECT_PAGE = <?= json_encode([
@@ -173,7 +191,7 @@ require __DIR__ . '/src/Views/header.php';
         'events'       => $eventsData,
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
 </script>
-<script src="assets/js/common.js?v=1.3.0"></script>
-<script src="assets/js/project.js?v=1.3.0"></script>
+<script src="assets/js/common.js?v=1.4.0"></script>
+<script src="assets/js/project.js?v=1.4.0"></script>
 </body>
 </html>

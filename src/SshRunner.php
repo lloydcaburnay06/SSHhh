@@ -398,6 +398,20 @@ final class SshRunner
             $ssh->disableQuietMode();
             $ssh->setTimeout((int) $project['command_timeout']);
 
+            $symlinkInfo = null;
+            if ($mode === 'deploy_all') {
+                if (!empty($project['backup_db_before_deploy'])) {
+                    $this->runPreDeployBackup($ssh, $project, $remotePath, $send, $transcript);
+                }
+
+                if (($project['deploy_strategy'] ?? 'direct') === 'symlink') {
+                    $symlinkInfo = $this->prepareSymlinkRelease($ssh, $project, $remotePath, $send, $transcript);
+                    if ($symlinkInfo !== null) {
+                        $remotePath = $symlinkInfo['release_dir'];
+                    }
+                }
+            }
+
             foreach ($stepsToRun as $index => $step) {
                 $stepNum = $index + 1;
                 $stepStart = hrtime(true);
@@ -526,6 +540,20 @@ final class SshRunner
                         break;
                     }
                 }
+            }
+
+            if ($symlinkInfo !== null) {
+                if ($overallStatus === 'success') {
+                    $this->activateSymlinkRelease($ssh, $project, $symlinkInfo, $send, $transcript);
+                } else {
+                    $failMsg = "\n[ATOMIC] Deployment failed. Active release remains unchanged pointing to previous release.\n";
+                    $transcript[] = $failMsg;
+                    $send(['type' => 'chunk', 'step_number' => $totalSteps, 'data' => $failMsg]);
+                }
+            }
+
+            if ($overallStatus === 'success' && $mode === 'deploy_all' && !empty($project['health_check_url'])) {
+                $this->runHealthCheckVerification($project, $send, $transcript);
             }
         } catch (Throwable $e) {
             $overallStatus = 'failed';
@@ -721,6 +749,756 @@ final class SshRunner
             return "{$ms}ms";
         }
         return number_format($ms / 1000, 2) . 's';
+    }
+
+    /**
+     * Inspect remote server vital metrics (OS, uptime, load averages, RAM %, Disk %, active services).
+     *
+     * @return array<string, mixed>
+     */
+    public function getServerPulse(int $projectId): array
+    {
+        $bundle = $this->projects->getWithDecryptedCredentials($projectId);
+        $project = $bundle['project'];
+
+        $conn = $this->connect(
+            host: (string) $project['ssh_host'],
+            port: (int) $project['ssh_port'],
+            username: (string) $project['ssh_username'],
+            authType: (string) $project['ssh_auth_type'],
+            password: $bundle['password'],
+            privateKey: $bundle['private_key'],
+            passphrase: $bundle['passphrase'],
+            timeout: max(5, min(20, (int) ($project['ssh_timeout'] ?? 10)))
+        );
+
+        /** @var SSH2 $ssh */
+        $ssh = $conn['ssh'];
+
+        try {
+            $remotePath = trim((string) $project['remote_path']);
+            $targetDir = ($remotePath !== '' && $remotePath !== '~') ? escapeshellarg($remotePath) : '~';
+
+            $script = <<<'BASH'
+echo "===OS==="
+uname -srm 2>/dev/null || uname -a 2>/dev/null
+echo "===UPTIME==="
+uptime 2>/dev/null
+echo "===MEMORY==="
+free -m 2>/dev/null || cat /proc/meminfo 2>/dev/null | head -n 4
+echo "===DISK==="
+df -hP %s 2>/dev/null || df -hP . 2>/dev/null || df -hP / 2>/dev/null
+echo "===SERVICES==="
+for s in nginx apache2 caddy php8.4-fpm php8.3-fpm php8.2-fpm php8.1-fpm php8.0-fpm php7.4-fpm php-fpm mysql mariadb mysqld postgresql redis redis-server supervisor supervisord; do
+  if command -v systemctl >/dev/null 2>&1; then
+    st=$(systemctl is-active "$s" 2>/dev/null)
+    if [ "$st" = "active" ] || [ "$st" = "failed" ] || [ "$st" = "activating" ]; then
+      echo "$s:$st"
+    fi
+  fi
+done
+echo "===PHP==="
+php -v 2>/dev/null | head -n 1
+BASH;
+            $fullCmd = sprintf($script, $targetDir);
+            $rawOutput = (string) $ssh->exec($fullCmd);
+            return $this->parseServerPulseOutput($rawOutput, (string) $project['remote_path']);
+        } finally {
+            if ($ssh->isConnected()) {
+                $ssh->disconnect();
+            }
+        }
+    }
+
+    /**
+     * Reads remote .env and .env.example, comparing keys to detect missing environment variables.
+     *
+     * @return array<string, mixed>
+     */
+    public function getRemoteEnv(int $projectId): array
+    {
+        $bundle = $this->projects->getWithDecryptedCredentials($projectId);
+        $project = $bundle['project'];
+        $remotePath = trim((string) $project['remote_path']);
+        if ($remotePath === '') {
+            $remotePath = '~';
+        }
+
+        $conn = $this->connect(
+            host: (string) $project['ssh_host'],
+            port: (int) $project['ssh_port'],
+            username: (string) $project['ssh_username'],
+            authType: (string) $project['ssh_auth_type'],
+            password: $bundle['password'],
+            privateKey: $bundle['private_key'],
+            passphrase: $bundle['passphrase'],
+            timeout: max(5, min(20, (int) ($project['ssh_timeout'] ?? 10)))
+        );
+
+        /** @var SSH2 $ssh */
+        $ssh = $conn['ssh'];
+
+        try {
+            $cdTarget = $this->buildCdTarget($remotePath);
+            $cmd = "cd {$cdTarget} && pwd && (if [ -f shared/.env ]; then cat shared/.env; elif [ -f .env ]; then cat .env; elif [ -f current/.env ]; then cat current/.env; else echo '__DEPLOYER_NO_ENV__'; fi) && echo '===EXAMPLE===' && (if [ -f .env.example ]; then cat .env.example; elif [ -f current/.env.example ]; then cat current/.env.example; else echo '__DEPLOYER_NO_EXAMPLE__'; fi)";
+            $output = (string) $ssh->exec($cmd);
+
+            $parts = explode('===EXAMPLE===', $output, 2);
+            $envPart = $parts[0] ?? '';
+            $examplePart = $parts[1] ?? '';
+
+            $envLines = explode("\n", trim($envPart));
+            $pwd = array_shift($envLines);
+            $envBody = implode("\n", $envLines);
+
+            $hasEnv = !str_contains($envBody, '__DEPLOYER_NO_ENV__');
+            $hasExample = !str_contains($examplePart, '__DEPLOYER_NO_EXAMPLE__');
+
+            $envContent = $hasEnv ? trim($envBody) : '';
+            $exampleContent = $hasExample ? trim($examplePart) : '';
+
+            $envKeys = $this->extractEnvKeys($envContent);
+            $exampleKeys = $this->extractEnvKeys($exampleContent);
+
+            $missingInEnv = array_values(array_diff($exampleKeys, $envKeys));
+            $extraInEnv = array_values(array_diff($envKeys, $exampleKeys));
+
+            return [
+                'current_dir'    => $pwd,
+                'has_env'        => $hasEnv,
+                'env'            => $envContent,
+                'has_example'    => $hasExample,
+                'env_example'    => $exampleContent,
+                'missing_keys'   => $missingInEnv,
+                'extra_keys'     => $extraInEnv,
+            ];
+        } finally {
+            if ($ssh->isConnected()) {
+                $ssh->disconnect();
+            }
+        }
+    }
+
+    /**
+     * Creates an automated timestamped backup and saves new remote .env content.
+     *
+     * @return array<string, mixed>
+     */
+    public function saveRemoteEnv(int $projectId, string $content): array
+    {
+        $bundle = $this->projects->getWithDecryptedCredentials($projectId);
+        $project = $bundle['project'];
+        $remotePath = trim((string) $project['remote_path']);
+        if ($remotePath === '') {
+            $remotePath = '~';
+        }
+
+        $conn = $this->connect(
+            host: (string) $project['ssh_host'],
+            port: (int) $project['ssh_port'],
+            username: (string) $project['ssh_username'],
+            authType: (string) $project['ssh_auth_type'],
+            password: $bundle['password'],
+            privateKey: $bundle['private_key'],
+            passphrase: $bundle['passphrase'],
+            timeout: max(5, min(20, (int) ($project['ssh_timeout'] ?? 10)))
+        );
+
+        /** @var SSH2 $ssh */
+        $ssh = $conn['ssh'];
+
+        try {
+            $cdTarget = $this->buildCdTarget($remotePath);
+            $b64 = base64_encode($content);
+            $timestamp = date('Ymd_His');
+
+            $script = <<<BASH
+cd {$cdTarget} || exit 1
+TARGET_FILE=".env"
+if [ -d "shared" ]; then
+    TARGET_FILE="shared/.env"
+fi
+if [ -f "\$TARGET_FILE" ]; then
+    cp "\$TARGET_FILE" "\${TARGET_FILE}.backup.{$timestamp}" || exit 2
+fi
+echo '{$b64}' | base64 -d > "\$TARGET_FILE" || exit 3
+chmod 600 "\$TARGET_FILE" 2>/dev/null || true
+echo "SAVED:\$TARGET_FILE:\${TARGET_FILE}.backup.{$timestamp}"
+BASH;
+
+            $output = trim((string) $ssh->exec($script));
+            $exitCode = $ssh->getExitStatus();
+            if ($exitCode !== 0) {
+                throw new RuntimeException("Failed to save remote .env (exit code {$exitCode}): " . $output);
+            }
+
+            $this->logger->log([
+                'project_id'   => $projectId,
+                'project_name' => (string) $project['name'],
+                'category'     => 'audit',
+                'event_type'   => 'env_updated',
+                'status'       => 'info',
+                'title'        => 'Updated remote .env configuration',
+                'ssh_target'   => $project['ssh_username'] . '@' . $project['ssh_host'],
+                'output_log'   => "Remote .env updated. Backup created: .env.backup.{$timestamp}",
+            ]);
+
+            return [
+                'ok'            => true,
+                'message'       => 'Remote .env updated successfully.',
+                'backup_file'   => ".env.backup.{$timestamp}",
+            ];
+        } finally {
+            if ($ssh->isConnected()) {
+                $ssh->disconnect();
+            }
+        }
+    }
+
+    /**
+     * Checks HTTP health check URL and measures response time.
+     *
+     * @return array<string, mixed>
+     */
+    public function checkHealth(string $url): array
+    {
+        $url = trim($url);
+        if ($url === '' || !preg_match('#^https?://#i', $url)) {
+            return [
+                'ok'          => false,
+                'status_code' => 0,
+                'duration_ms' => 0,
+                'error'       => 'Invalid URL provided.',
+            ];
+        }
+
+        $start = hrtime(true);
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS      => 3,
+            CURLOPT_TIMEOUT        => 8,
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => false,
+            CURLOPT_USERAGENT      => 'SSHhh-Deployer-HealthCheck/1.0',
+        ]);
+
+        $body = curl_exec($ch);
+        $errno = curl_errno($ch);
+        $error = curl_error($ch);
+        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        $durationMs = (int) round((hrtime(true) - $start) / 1_000_000);
+        $isOk = ($errno === 0 && $code >= 200 && $code < 400);
+
+        return [
+            'ok'          => $isOk,
+            'status_code' => $code,
+            'duration_ms' => $durationMs,
+            'error'       => $errno !== 0 ? $error : ($isOk ? null : "HTTP {$code}"),
+            'snippet'     => is_string($body) ? mb_substr(strip_tags($body), 0, 160) : '',
+        ];
+    }
+
+    /**
+     * Lists releases in releases/ folder and detects active symlink.
+     *
+     * @return array<string, mixed>
+     */
+    public function listReleases(int $projectId): array
+    {
+        $bundle = $this->projects->getWithDecryptedCredentials($projectId);
+        $project = $bundle['project'];
+        $remotePath = trim((string) $project['remote_path']);
+        if ($remotePath === '') {
+            $remotePath = '~';
+        }
+
+        $conn = $this->connect(
+            host: (string) $project['ssh_host'],
+            port: (int) $project['ssh_port'],
+            username: (string) $project['ssh_username'],
+            authType: (string) $project['ssh_auth_type'],
+            password: $bundle['password'],
+            privateKey: $bundle['private_key'],
+            passphrase: $bundle['passphrase'],
+            timeout: max(5, min(20, (int) ($project['ssh_timeout'] ?? 10)))
+        );
+
+        /** @var SSH2 $ssh */
+        $ssh = $conn['ssh'];
+
+        try {
+            $cdTarget = $this->buildCdTarget($remotePath);
+            $script = <<<BASH
+cd {$cdTarget} || exit 1
+CURRENT_LINK=""
+if [ -L "current" ]; then
+    CURRENT_LINK=$(readlink current | sed 's|.*/||')
+fi
+echo "CURRENT:\$CURRENT_LINK"
+if [ -d "releases" ]; then
+    cd releases
+    ls -1 -dt 20* 2>/dev/null | head -n 25
+fi
+BASH;
+            $output = trim((string) $ssh->exec($script));
+            $lines = array_filter(array_map('trim', explode("\n", $output)), static fn($l) => $l !== '');
+            $currentRelease = '';
+            $releases = [];
+
+            foreach ($lines as $line) {
+                if (str_starts_with($line, 'CURRENT:')) {
+                    $currentRelease = trim(substr($line, 8));
+                } elseif (preg_match('/^\d{8}_\d{6}$/', $line) || preg_match('/^\d{14}$/', $line)) {
+                    $releases[] = [
+                        'id'        => $line,
+                        'is_active' => ($line === $currentRelease),
+                        'date'      => $this->formatReleaseDate($line),
+                    ];
+                }
+            }
+
+            return [
+                'deploy_strategy' => $project['deploy_strategy'],
+                'current_release' => $currentRelease,
+                'releases'        => $releases,
+            ];
+        } finally {
+            if ($ssh->isConnected()) {
+                $ssh->disconnect();
+            }
+        }
+    }
+
+    /**
+     * Atomically rolls back 'current' symlink to a previous release.
+     *
+     * @return array<string, mixed>
+     */
+    public function rollbackRelease(int $projectId, ?string $targetRelease = null): array
+    {
+        $bundle = $this->projects->getWithDecryptedCredentials($projectId);
+        $project = $bundle['project'];
+        $remotePath = trim((string) $project['remote_path']);
+        if ($remotePath === '') {
+            throw new InvalidArgumentException('Remote path is not configured.');
+        }
+
+        $list = $this->listReleases($projectId);
+        $releases = $list['releases'];
+        if (empty($releases)) {
+            throw new RuntimeException('No historical releases found on remote server to roll back to.');
+        }
+
+        $chosen = $targetRelease;
+        if ($chosen === null || $chosen === '') {
+            $currIdx = null;
+            foreach ($releases as $idx => $r) {
+                if ($r['is_active']) {
+                    $currIdx = $idx;
+                    break;
+                }
+            }
+            if ($currIdx !== null && isset($releases[$currIdx + 1])) {
+                $chosen = $releases[$currIdx + 1]['id'];
+            } elseif (isset($releases[0]) && !$releases[0]['is_active']) {
+                $chosen = $releases[0]['id'];
+            } elseif (isset($releases[1])) {
+                $chosen = $releases[1]['id'];
+            } else {
+                throw new RuntimeException('Only one release exists; cannot roll back further.');
+            }
+        }
+
+        $found = false;
+        foreach ($releases as $r) {
+            if ($r['id'] === $chosen) {
+                $found = true;
+                break;
+            }
+        }
+        if (!$found) {
+            throw new InvalidArgumentException("Release '{$chosen}' does not exist in releases directory.");
+        }
+
+        $conn = $this->connect(
+            host: (string) $project['ssh_host'],
+            port: (int) $project['ssh_port'],
+            username: (string) $project['ssh_username'],
+            authType: (string) $project['ssh_auth_type'],
+            password: $bundle['password'],
+            privateKey: $bundle['private_key'],
+            passphrase: $bundle['passphrase'],
+            timeout: max(5, min(20, (int) ($project['ssh_timeout'] ?? 10)))
+        );
+
+        /** @var SSH2 $ssh */
+        $ssh = $conn['ssh'];
+
+        try {
+            $cdTarget = $this->buildCdTarget($remotePath);
+            $script = <<<BASH
+cd {$cdTarget} || exit 1
+if [ ! -d "releases/{$chosen}" ]; then
+    echo "ERROR: Target release directory does not exist."
+    exit 2
+fi
+ln -sfn "releases/{$chosen}" current_new && mv -Tf current_new current || exit 3
+if command -v php >/dev/null 2>&1; then
+    (cd current && php artisan queue:restart 2>/dev/null || true)
+fi
+echo "ROLLBACK_OK"
+BASH;
+            $output = trim((string) $ssh->exec($script));
+            if (!str_contains($output, 'ROLLBACK_OK')) {
+                throw new RuntimeException("Rollback failed: " . $output);
+            }
+
+            $this->projects->updateCurrentRelease($projectId, $chosen);
+
+            $this->logger->log([
+                'project_id'   => $projectId,
+                'project_name' => (string) $project['name'],
+                'category'     => 'deployment',
+                'event_type'   => 'rollback',
+                'status'       => 'warning',
+                'title'        => "Rolled back to release {$chosen}",
+                'ssh_target'   => $project['ssh_username'] . '@' . $project['ssh_host'],
+                'output_log'   => "Atomic symlink 'current' repointed to releases/{$chosen}.\nArtisan queue workers signaled to restart.",
+            ]);
+
+            return [
+                'ok'             => true,
+                'rolled_back_to' => $chosen,
+                'message'        => "Successfully rolled back to release {$chosen}.",
+            ];
+        } finally {
+            if ($ssh->isConnected()) {
+                $ssh->disconnect();
+            }
+        }
+    }
+
+    private function runPreDeployBackup(
+        SSH2 $ssh,
+        array $project,
+        string $remotePath,
+        callable $send,
+        array &$transcript
+    ): void {
+        $start = hrtime(true);
+        $cdTarget = $this->buildCdTarget($remotePath);
+        $timestamp = date('Ymd_His');
+        $backupFile = "storage/backups/db_backup_{$timestamp}.sql.gz";
+
+        $msg = sprintf("[%s] [BACKUP] Creating pre-deploy database snapshot...", date('H:i:s'));
+        $transcript[] = $msg;
+        $send(['type' => 'chunk', 'step_number' => 0, 'data' => $msg . "\n"]);
+
+        $backupScript = <<<BASH
+cd {$cdTarget} || exit 1
+mkdir -p storage/backups || exit 2
+BACKUP_PATH="{$backupFile}"
+
+# Extract DB credentials from .env if present
+if [ -f ".env" ]; then
+    DB_CONN=$(grep -E '^DB_CONNECTION=' .env | cut -d '=' -f2- | tr -d '"\047\r ')
+    DB_H=$(grep -E '^DB_HOST=' .env | cut -d '=' -f2- | tr -d '"\047\r ')
+    DB_P=$(grep -E '^DB_PORT=' .env | cut -d '=' -f2- | tr -d '"\047\r ')
+    DB_D=$(grep -E '^DB_DATABASE=' .env | cut -d '=' -f2- | tr -d '"\047\r ')
+    DB_U=$(grep -E '^DB_USERNAME=' .env | cut -d '=' -f2- | tr -d '"\047\r ')
+    DB_PW=$(grep -E '^DB_PASSWORD=' .env | cut -d '=' -f2- | tr -d '"\047\r ')
+fi
+
+if [ "\$DB_CONN" = "sqlite" ] || [ -f "database/database.sqlite" ]; then
+    SQLITE_FILE=\${DB_D:-database/database.sqlite}
+    if [ -f "\$SQLITE_FILE" ]; then
+        gzip -c "\$SQLITE_FILE" > "\$BACKUP_PATH"
+        echo "SUCCESS:SQLITE:\$(ls -lh \$BACKUP_PATH | awk '{print \$5}')"
+        exit 0
+    fi
+fi
+
+if command -v mysqldump >/dev/null 2>&1 && [ -n "\$DB_D" ]; then
+    MYSQL_PWD="\$DB_PW" mysqldump -h "\${DB_H:-127.0.0.1}" -P "\${DB_P:-3306}" -u "\${DB_U:-root}" "\$DB_D" 2>/dev/null | gzip > "\$BACKUP_PATH"
+    if [ -s "\$BACKUP_PATH" ]; then
+        echo "SUCCESS:MYSQL:\$(ls -lh \$BACKUP_PATH | awk '{print \$5}')"
+        exit 0
+    fi
+fi
+
+if command -v pg_dump >/dev/null 2>&1 && [ -n "\$DB_D" ]; then
+    PGPASSWORD="\$DB_PW" pg_dump -h "\${DB_H:-127.0.0.1}" -p "\${DB_P:-5432}" -U "\${DB_U:-postgres}" "\$DB_D" 2>/dev/null | gzip > "\$BACKUP_PATH"
+    if [ -s "\$BACKUP_PATH" ]; then
+        echo "SUCCESS:POSTGRES:\$(ls -lh \$BACKUP_PATH | awk '{print \$5}')"
+        exit 0
+    fi
+fi
+
+echo "SKIPPED:No database found or dump utility unavailable."
+BASH;
+
+        $res = trim((string) $ssh->exec($backupScript));
+        $durationMs = (int) round((hrtime(true) - $start) / 1_000_000);
+
+        if (str_starts_with($res, 'SUCCESS:')) {
+            $parts = explode(':', $res);
+            $size = $parts[2] ?? '';
+            $okMsg = sprintf("[%s] [BACKUP] Snapshot saved: %s (%s) in %s\n", date('H:i:s'), $backupFile, $size, $this->formatDuration($durationMs));
+            $transcript[] = $okMsg;
+            $send(['type' => 'chunk', 'step_number' => 0, 'data' => $okMsg]);
+        } else {
+            $warnMsg = sprintf("[%s] [BACKUP] Notice: %s\n", date('H:i:s'), $res ?: 'Could not generate database snapshot (continuing pipeline).');
+            $transcript[] = $warnMsg;
+            $send(['type' => 'chunk', 'step_number' => 0, 'data' => $warnMsg]);
+        }
+    }
+
+    private function prepareSymlinkRelease(
+        SSH2 $ssh,
+        array $project,
+        string $basePath,
+        callable $send,
+        array &$transcript
+    ): ?array {
+        $timestamp = date('Ymd_His');
+        $cdTarget = $this->buildCdTarget($basePath);
+        $repoBranch = escapeshellarg($project['repo_branch'] ?: 'main');
+
+        $msg = sprintf("[%s] [ATOMIC] Preparing zero-downtime release: releases/%s", date('H:i:s'), $timestamp);
+        $transcript[] = $msg;
+        $send(['type' => 'chunk', 'step_number' => 0, 'data' => $msg . "\n"]);
+
+        $script = <<<BASH
+cd {$cdTarget} || exit 1
+mkdir -p releases/{$timestamp} shared/storage shared/bootstrap/cache || exit 2
+
+if [ ! -f "shared/.env" ]; then
+    if [ -f ".env" ]; then
+        cp .env shared/.env
+    elif [ -f "current/.env" ]; then
+        cp current/.env shared/.env
+    fi
+fi
+
+if [ -d ".git" ]; then
+    git archive {$repoBranch} | tar -x -C "releases/{$timestamp}" || exit 3
+elif [ -d "current/.git" ]; then
+    (cd current && git archive {$repoBranch} | tar -x -C "../releases/{$timestamp}") || exit 3
+fi
+
+rm -rf "releases/{$timestamp}/storage"
+ln -sfn "../../shared/storage" "releases/{$timestamp}/storage"
+
+rm -f "releases/{$timestamp}/.env"
+ln -sfn "../../shared/.env" "releases/{$timestamp}/.env"
+
+echo "RELEASE_PREPARED:releases/{$timestamp}"
+BASH;
+
+        $out = trim((string) $ssh->exec($script));
+        if (!str_contains($out, 'RELEASE_PREPARED')) {
+            $warn = sprintf("[%s] [ATOMIC WARNING] Symlink prep issue: %s. Continuing in base directory.\n", date('H:i:s'), $out);
+            $transcript[] = $warn;
+            $send(['type' => 'chunk', 'step_number' => 0, 'data' => $warn]);
+            return null;
+        }
+
+        return [
+            'base_path'    => $basePath,
+            'timestamp'    => $timestamp,
+            'release_dir'  => rtrim($basePath, '/\\') . "/releases/{$timestamp}",
+        ];
+    }
+
+    private function activateSymlinkRelease(
+        SSH2 $ssh,
+        array $project,
+        array $symlinkInfo,
+        callable $send,
+        array &$transcript
+    ): void {
+        $basePath = $symlinkInfo['base_path'];
+        $timestamp = $symlinkInfo['timestamp'];
+        $cdTarget = $this->buildCdTarget($basePath);
+        $keep = max(2, min(30, (int) ($project['releases_to_keep'] ?? 5)));
+
+        $actScript = <<<BASH
+cd {$cdTarget} || exit 1
+ln -sfn "releases/{$timestamp}" current_new && mv -Tf current_new current || exit 2
+
+if [ -d "releases" ]; then
+    (cd releases && ls -1 -dt 20* 2>/dev/null | tail -n +$(({$keep} + 1)) | xargs rm -rf 2>/dev/null || true)
+fi
+
+echo "RELEASE_ACTIVE:{$timestamp}"
+BASH;
+
+        $out = trim((string) $ssh->exec($actScript));
+        if (str_contains($out, 'RELEASE_ACTIVE')) {
+            $this->projects->updateCurrentRelease((int) $project['id'], $timestamp);
+            $msg = sprintf("[%s] [ATOMIC] Zero-downtime release %s activated successfully! 'current' symlink updated.\n", date('H:i:s'), $timestamp);
+            $transcript[] = $msg;
+            $send(['type' => 'chunk', 'step_number' => 0, 'data' => $msg]);
+        }
+    }
+
+    private function runHealthCheckVerification(
+        array $project,
+        callable $send,
+        array &$transcript
+    ): void {
+        $url = (string) $project['health_check_url'];
+        $msg = sprintf("[%s] [HEALTH] Checking health URL: %s", date('H:i:s'), $url);
+        $transcript[] = $msg;
+        $send(['type' => 'chunk', 'step_number' => 0, 'data' => $msg . "\n"]);
+
+        $res = $this->checkHealth($url);
+        $projectId = (int) $project['id'];
+
+        if ($res['ok']) {
+            $this->projects->updateHealthStatus($projectId, 'healthy', $res['status_code']);
+            $okMsg = sprintf("[%s] [HEALTH VERIFIED] HTTP %d OK in %d ms! Site is responding normally.\n", date('H:i:s'), $res['status_code'], $res['duration_ms']);
+            $transcript[] = $okMsg;
+            $send(['type' => 'chunk', 'step_number' => 0, 'data' => $okMsg]);
+        } else {
+            $this->projects->updateHealthStatus($projectId, 'unhealthy', $res['status_code']);
+            $failMsg = sprintf("[%s] [HEALTH WARNING] Health check returned %s (%d ms). Check server logs.\n", date('H:i:s'), $res['error'] ?? ('HTTP ' . $res['status_code']), $res['duration_ms']);
+            $transcript[] = $failMsg;
+            $send(['type' => 'chunk', 'step_number' => 0, 'data' => $failMsg]);
+        }
+    }
+
+    private function parseServerPulseOutput(string $raw, string $remotePath): array
+    {
+        $sections = [
+            'os'       => '',
+            'uptime'   => '',
+            'memory'   => '',
+            'disk'     => '',
+            'services' => '',
+            'php'      => '',
+        ];
+
+        $currentSection = null;
+        $lines = explode("\n", $raw);
+        foreach ($lines as $line) {
+            $trim = trim($line);
+            if (preg_match('/^===([A-Z]+)===$/', $trim, $m)) {
+                $secName = strtolower($m[1]);
+                $currentSection = array_key_exists($secName, $sections) ? $secName : null;
+                continue;
+            }
+            if ($currentSection !== null) {
+                $sections[$currentSection] .= $line . "\n";
+            }
+        }
+
+        $os = trim($sections['os']);
+
+        $uptimeRaw = trim($sections['uptime']);
+        $loadAverages = [0.0, 0.0, 0.0];
+        if (preg_match('/load average[s]?:\s*([0-9.]+),?\s*([0-9.]+),?\s*([0-9.]+)/i', $uptimeRaw, $lm)) {
+            $loadAverages = [(float) $lm[1], (float) $lm[2], (float) $lm[3]];
+        }
+
+        $ram = [
+            'total_mb'     => null,
+            'used_mb'      => null,
+            'free_mb'      => null,
+            'used_percent' => null,
+        ];
+        foreach (explode("\n", $sections['memory']) as $mLine) {
+            if (str_starts_with(trim($mLine), 'Mem:')) {
+                $parts = preg_split('/\s+/', trim($mLine));
+                if (count($parts) >= 3) {
+                    $tot = (int) $parts[1];
+                    $used = (int) $parts[2];
+                    $ram['total_mb'] = $tot;
+                    $ram['used_mb'] = $used;
+                    $ram['free_mb'] = max(0, $tot - $used);
+                    $ram['used_percent'] = $tot > 0 ? (int) round(($used / $tot) * 100) : 0;
+                }
+                break;
+            }
+        }
+
+        $disk = [
+            'filesystem'   => null,
+            'size'         => null,
+            'used'         => null,
+            'avail'        => null,
+            'used_percent' => null,
+            'mount'        => null,
+        ];
+        $diskLines = array_values(array_filter(array_map('trim', explode("\n", $sections['disk']))));
+        if (count($diskLines) >= 2) {
+            $dataLine = $diskLines[1];
+            $parts = preg_split('/\s+/', $dataLine);
+            if (count($parts) >= 6) {
+                $disk['filesystem'] = $parts[0];
+                $disk['size'] = $parts[1];
+                $disk['used'] = $parts[2];
+                $disk['avail'] = $parts[3];
+                $disk['used_percent'] = (int) rtrim($parts[4], '%');
+                $disk['mount'] = $parts[5];
+            }
+        }
+
+        $services = [];
+        foreach (explode("\n", trim($sections['services'])) as $sLine) {
+            $sLine = trim($sLine);
+            if (str_contains($sLine, ':')) {
+                [$svc, $st] = explode(':', $sLine, 2);
+                $services[] = [
+                    'name'   => trim($svc),
+                    'status' => trim($st),
+                ];
+            }
+        }
+
+        $php = trim($sections['php']);
+
+        return [
+            'os'          => $os,
+            'uptime_raw'  => $uptimeRaw,
+            'cpu_load'    => $loadAverages,
+            'ram'         => $ram,
+            'disk'        => $disk,
+            'services'    => $services,
+            'php_version' => $php,
+        ];
+    }
+
+    private function extractEnvKeys(string $content): array
+    {
+        $keys = [];
+        $lines = explode("\n", $content);
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if ($line === '' || str_starts_with($line, '#')) {
+                continue;
+            }
+            if (str_contains($line, '=')) {
+                $key = trim(explode('=', $line, 2)[0]);
+                if (preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $key)) {
+                    $keys[] = $key;
+                }
+            }
+        }
+        return array_values(array_unique($keys));
+    }
+
+    private function formatReleaseDate(string $rel): string
+    {
+        if (preg_match('/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})$/', $rel, $m)) {
+            return "{$m[1]}-{$m[2]}-{$m[3]} {$m[4]}:{$m[5]}:{$m[6]}";
+        }
+        return $rel;
     }
 }
 

@@ -52,23 +52,20 @@ final class Database
             }
         }
 
-        $markerFile = rtrim($storageDir, '/\\') . '/.schema_v4.ready';
+        $markerFile = rtrim($storageDir, '/\\') . '/.schema_v5.ready';
         if ($needsMigration || !is_file($markerFile)) {
             $this->migrate();
             @file_put_contents($markerFile, date('c'));
         } else {
             // Quick sanity check in case tables or columns were altered manually via phpMyAdmin
             $stmt = $this->pdo->query("SHOW TABLES LIKE 'event_logs'");
-            $colStmt = $this->pdo->query("SHOW COLUMNS FROM `projects` LIKE 'app_status'");
-            $cmdColStmt = $this->pdo->query("SHOW COLUMNS FROM `project_commands` LIKE 'app_state_trigger'");
+            $colStmt = $this->pdo->query("SHOW COLUMNS FROM `projects` LIKE 'health_check_url'");
             $authStmt = $this->pdo->query("SHOW TABLES LIKE 'auth_state'");
             if (
                 $stmt === false
                 || $stmt->fetchColumn() === false
                 || $colStmt === false
                 || $colStmt->fetch() === false
-                || $cmdColStmt === false
-                || $cmdColStmt->fetch() === false
                 || $authStmt === false
                 || $authStmt->fetchColumn() === false
             ) {
@@ -109,12 +106,27 @@ final class Database
                 `last_deploy_duration_ms` INT UNSIGNED NULL,
                 `app_status` VARCHAR(20) NOT NULL DEFAULT 'unknown',
                 `app_status_updated_at` DATETIME NULL,
+                `health_check_url` VARCHAR(500) NULL,
+                `last_health_status` VARCHAR(20) NOT NULL DEFAULT 'unknown',
+                `last_health_checked_at` DATETIME NULL,
+                `last_health_response_code` INT NULL,
+                `backup_db_before_deploy` TINYINT(1) NOT NULL DEFAULT 0,
+                `backup_db_driver` VARCHAR(30) NOT NULL DEFAULT 'auto',
+                `webhook_enabled` TINYINT(1) NOT NULL DEFAULT 0,
+                `webhook_token` VARCHAR(64) NULL,
+                `webhook_branch` VARCHAR(120) NOT NULL DEFAULT 'main',
+                `deploy_strategy` VARCHAR(30) NOT NULL DEFAULT 'direct',
+                `releases_to_keep` INT UNSIGNED NOT NULL DEFAULT 5,
+                `shared_dirs` TEXT NULL,
+                `shared_files` TEXT NULL,
+                `current_release_id` VARCHAR(60) NULL,
                 `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 PRIMARY KEY (`id`),
                 KEY `idx_environment` (`environment`),
                 KEY `idx_sort_order` (`sort_order`, `id`),
                 KEY `idx_app_status` (`app_status`),
+                KEY `idx_webhook_token` (`webhook_token`),
                 KEY `idx_updated_at` (`updated_at`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         SQL);
@@ -139,6 +151,39 @@ final class Database
             $this->pdo->exec(
                 "ALTER TABLE `projects` ADD COLUMN `app_status` VARCHAR(20) NOT NULL DEFAULT 'unknown' AFTER `last_deploy_duration_ms`, ADD COLUMN `app_status_updated_at` DATETIME NULL AFTER `app_status`, ADD KEY `idx_app_status` (`app_status`)"
             );
+        }
+
+        // Non-destructive upgrade for v5 deployment features (health check, backup, webhooks, zero-downtime releases)
+        $healthCol = $this->pdo->query("SHOW COLUMNS FROM `projects` LIKE 'health_check_url'");
+        if ($healthCol === false || $healthCol->fetch() === false) {
+            $this->pdo->exec(<<<'SQL'
+                ALTER TABLE `projects`
+                    ADD COLUMN `health_check_url` VARCHAR(500) NULL AFTER `app_status_updated_at`,
+                    ADD COLUMN `last_health_status` VARCHAR(20) NOT NULL DEFAULT 'unknown' AFTER `health_check_url`,
+                    ADD COLUMN `last_health_checked_at` DATETIME NULL AFTER `last_health_status`,
+                    ADD COLUMN `last_health_response_code` INT NULL AFTER `last_health_checked_at`,
+                    ADD COLUMN `backup_db_before_deploy` TINYINT(1) NOT NULL DEFAULT 0 AFTER `last_health_response_code`,
+                    ADD COLUMN `backup_db_driver` VARCHAR(30) NOT NULL DEFAULT 'auto' AFTER `backup_db_before_deploy`,
+                    ADD COLUMN `webhook_enabled` TINYINT(1) NOT NULL DEFAULT 0 AFTER `backup_db_driver`,
+                    ADD COLUMN `webhook_token` VARCHAR(64) NULL AFTER `webhook_enabled`,
+                    ADD COLUMN `webhook_branch` VARCHAR(120) NOT NULL DEFAULT 'main' AFTER `webhook_token`,
+                    ADD COLUMN `deploy_strategy` VARCHAR(30) NOT NULL DEFAULT 'direct' AFTER `webhook_branch`,
+                    ADD COLUMN `releases_to_keep` INT UNSIGNED NOT NULL DEFAULT 5 AFTER `deploy_strategy`,
+                    ADD COLUMN `shared_dirs` TEXT NULL AFTER `releases_to_keep`,
+                    ADD COLUMN `shared_files` TEXT NULL AFTER `shared_dirs`,
+                    ADD COLUMN `current_release_id` VARCHAR(60) NULL AFTER `shared_files`,
+                    ADD KEY `idx_webhook_token` (`webhook_token`)
+            SQL);
+
+            // Populate unique tokens for any existing projects
+            $stmt = $this->pdo->query("SELECT `id` FROM `projects` WHERE `webhook_token` IS NULL OR `webhook_token` = ''");
+            if ($stmt) {
+                $tokenUpd = $this->pdo->prepare("UPDATE `projects` SET `webhook_token` = :token, `updated_at` = `updated_at` WHERE `id` = :id");
+                while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                    $token = bin2hex(random_bytes(24));
+                    $tokenUpd->execute([':token' => $token, ':id' => (int) $row['id']]);
+                }
+            }
         }
 
         $this->pdo->exec(<<<'SQL'

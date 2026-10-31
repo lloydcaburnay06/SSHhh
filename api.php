@@ -49,6 +49,55 @@ function readJsonBody(): array
 }
 
 try {
+    // Public incoming webhook endpoint for Git push events (authenticated by unique project token)
+    if ($action === 'webhook') {
+        $token = trim((string) ($_GET['token'] ?? $_POST['token'] ?? ''));
+        if ($token === '') {
+            respondJson(['ok' => false, 'error' => 'Webhook token is required.'], 401);
+        }
+
+        $project = $app->projects()->findByWebhookToken($token);
+        if (!$project) {
+            respondJson(['ok' => false, 'error' => 'Invalid webhook token.'], 403);
+        }
+
+        if (empty($project['webhook_enabled'])) {
+            respondJson(['ok' => false, 'error' => 'Webhooks are disabled for this project.'], 403);
+        }
+
+        $bodyRaw = file_get_contents('php://input');
+        $payload = json_decode($bodyRaw, true) ?: [];
+        $pushedBranch = null;
+
+        if (!empty($payload['ref']) && is_string($payload['ref'])) {
+            $pushedBranch = str_replace('refs/heads/', '', $payload['ref']);
+        }
+        if (!$pushedBranch && !empty($payload['push']['changes'][0]['new']['name'])) {
+            $pushedBranch = (string) $payload['push']['changes'][0]['new']['name'];
+        }
+
+        $targetBranch = $project['webhook_branch'] ?: $project['repo_branch'] ?: 'main';
+        if ($pushedBranch !== null && $pushedBranch !== $targetBranch) {
+            respondJson([
+                'ok'      => true,
+                'ignored' => true,
+                'message' => "Pushed branch '{$pushedBranch}' does not match project webhook target branch '{$targetBranch}'. Deployment skipped.",
+            ]);
+        }
+
+        $app->releaseSessionLock();
+        $execRes = $app->runner()->execute(
+            projectId: (int) $project['id'],
+            mode: 'deploy_all'
+        );
+
+        respondJson([
+            'ok'      => true,
+            'message' => "Deployment pipeline executed for project '{$project['name']}'.",
+            'result'  => $execRes,
+        ]);
+    }
+
     // Read-only GET endpoints
     if ($method === 'GET') {
         switch ($action) {
@@ -152,6 +201,43 @@ try {
                         'error' => $e->getMessage(),
                     ], 400);
                 }
+
+            case 'server_pulse':
+                $projectId = (int) ($_GET['project_id'] ?? 0);
+                if ($projectId <= 0) {
+                    respondJson(['ok' => false, 'error' => 'Project ID is required.'], 422);
+                }
+                $pulse = $app->runner()->getServerPulse($projectId);
+                respondJson(['ok' => true, 'result' => $pulse]);
+
+            case 'get_env':
+                $projectId = (int) ($_GET['project_id'] ?? 0);
+                if ($projectId <= 0) {
+                    respondJson(['ok' => false, 'error' => 'Project ID is required.'], 422);
+                }
+                $envData = $app->runner()->getRemoteEnv($projectId);
+                respondJson(['ok' => true, 'result' => $envData]);
+
+            case 'check_health':
+                $url = trim((string) ($_GET['url'] ?? ''));
+                $projectId = (int) ($_GET['project_id'] ?? 0);
+                if ($url === '' && $projectId > 0) {
+                    $proj = $app->projects()->find($projectId);
+                    $url = (string) ($proj['health_check_url'] ?? '');
+                }
+                $res = $app->runner()->checkHealth($url);
+                if ($projectId > 0 && $url !== '') {
+                    $app->projects()->updateHealthStatus($projectId, $res['ok'] ? 'healthy' : 'unhealthy', $res['status_code']);
+                }
+                respondJson(['ok' => true, 'result' => $res]);
+
+            case 'list_releases':
+                $projectId = (int) ($_GET['project_id'] ?? 0);
+                if ($projectId <= 0) {
+                    respondJson(['ok' => false, 'error' => 'Project ID is required.'], 422);
+                }
+                $relData = $app->runner()->listReleases($projectId);
+                respondJson(['ok' => true, 'result' => $relData]);
 
             default:
                 respondJson(['ok' => false, 'error' => 'Unknown GET action.'], 400);
@@ -346,6 +432,69 @@ try {
                 'ok'      => true,
                 'deleted' => $deleted,
             ]);
+
+        case 'server_pulse':
+            $projectId = (int) ($body['project_id'] ?? 0);
+            if ($projectId <= 0) {
+                respondJson(['ok' => false, 'error' => 'Project ID is required.'], 422);
+            }
+            $pulse = $app->runner()->getServerPulse($projectId);
+            respondJson(['ok' => true, 'result' => $pulse]);
+
+        case 'get_env':
+            $projectId = (int) ($body['project_id'] ?? 0);
+            if ($projectId <= 0) {
+                respondJson(['ok' => false, 'error' => 'Project ID is required.'], 422);
+            }
+            $envData = $app->runner()->getRemoteEnv($projectId);
+            respondJson(['ok' => true, 'result' => $envData]);
+
+        case 'save_env':
+            $projectId = (int) ($body['project_id'] ?? 0);
+            if ($projectId <= 0) {
+                respondJson(['ok' => false, 'error' => 'Project ID is required.'], 422);
+            }
+            $content = (string) ($body['content'] ?? '');
+            $saveRes = $app->runner()->saveRemoteEnv($projectId, $content);
+            respondJson(['ok' => true, 'result' => $saveRes]);
+
+        case 'check_health':
+            $url = trim((string) ($body['url'] ?? ''));
+            $projectId = (int) ($body['project_id'] ?? 0);
+            if ($url === '' && $projectId > 0) {
+                $proj = $app->projects()->find($projectId);
+                $url = (string) ($proj['health_check_url'] ?? '');
+            }
+            $res = $app->runner()->checkHealth($url);
+            if ($projectId > 0 && $url !== '') {
+                $app->projects()->updateHealthStatus($projectId, $res['ok'] ? 'healthy' : 'unhealthy', $res['status_code']);
+            }
+            respondJson(['ok' => true, 'result' => $res]);
+
+        case 'list_releases':
+            $projectId = (int) ($body['project_id'] ?? 0);
+            if ($projectId <= 0) {
+                respondJson(['ok' => false, 'error' => 'Project ID is required.'], 422);
+            }
+            $relData = $app->runner()->listReleases($projectId);
+            respondJson(['ok' => true, 'result' => $relData]);
+
+        case 'rollback_release':
+            $projectId = (int) ($body['project_id'] ?? 0);
+            if ($projectId <= 0) {
+                respondJson(['ok' => false, 'error' => 'Project ID is required.'], 422);
+            }
+            $targetRelease = isset($body['target_release']) ? trim((string) $body['target_release']) : null;
+            $res = $app->runner()->rollbackRelease($projectId, $targetRelease);
+            respondJson(['ok' => true, 'result' => $res]);
+
+        case 'regenerate_webhook_token':
+            $projectId = (int) ($body['project_id'] ?? 0);
+            if ($projectId <= 0) {
+                respondJson(['ok' => false, 'error' => 'Project ID is required.'], 422);
+            }
+            $newToken = $app->projects()->regenerateWebhookToken($projectId);
+            respondJson(['ok' => true, 'token' => $newToken]);
 
         default:
             respondJson(['ok' => false, 'error' => 'Unknown POST action.'], 400);
