@@ -7,6 +7,14 @@
     let activeEnv = 'all';
     let searchQuery = '';
 
+    let activeAsideTab = 'events'; // 'events' | 'directory'
+    let activeCmdCat = 'all';
+    let cmdSearchQuery = '';
+    let cmdRunModal = null;
+    let execModalIsRunning = false;
+    let execModalTimerInterval = null;
+    let execModalRawOutput = '';
+
     function updateStats(stats) {
         if (!stats) return;
         const totalProjEl = document.getElementById('statTotalProjects');
@@ -203,6 +211,11 @@
 
     function renderGlobalEvents() {
         const listEl = document.getElementById('globalEventsList');
+        const countEl = document.getElementById('asideEventsCount');
+        if (countEl) {
+            countEl.textContent = globalEvents ? globalEvents.length : 0;
+        }
+        if (!listEl) return;
         if (!globalEvents || globalEvents.length === 0) {
             listEl.innerHTML = '<div style="padding:24px; text-align:center; color:var(--text-muted);">No events logged yet.</div>';
             return;
@@ -224,6 +237,9 @@
             globalEvents = evData.items || [];
             renderProjects();
             renderGlobalEvents();
+            if (cmdRunModal && cmdRunModal.populateProjects) {
+                cmdRunModal.populateProjects();
+            }
         } catch (err) {
             App.toast(err.message, 'error');
         }
@@ -653,6 +669,578 @@
                 if (itemEl) itemEl.classList.toggle('expanded');
             }
         });
+
+        // =========================================================================
+        // Developer Command Directory & Aside Tab Navigation
+        // =========================================================================
+        function initAsideTabs() {
+            const eventsTabBtn = document.getElementById('asideTabEventsBtn');
+            const dirTabBtn = document.getElementById('asideTabDirectoryBtn');
+            const eventsPane = document.getElementById('asidePaneEvents');
+            const dirPane = document.getElementById('asidePaneDirectory');
+            const eventsActions = document.getElementById('asideEventsActions');
+
+            function switchTab(tab) {
+                activeAsideTab = tab;
+                if (tab === 'events') {
+                    if (eventsTabBtn) {
+                        eventsTabBtn.classList.add('active');
+                        eventsTabBtn.setAttribute('aria-selected', 'true');
+                    }
+                    if (dirTabBtn) {
+                        dirTabBtn.classList.remove('active');
+                        dirTabBtn.setAttribute('aria-selected', 'false');
+                    }
+                    if (eventsPane) {
+                        eventsPane.style.display = '';
+                        eventsPane.classList.add('active');
+                    }
+                    if (dirPane) {
+                        dirPane.style.display = 'none';
+                        dirPane.classList.remove('active');
+                    }
+                    if (eventsActions) eventsActions.style.display = '';
+                } else {
+                    if (dirTabBtn) {
+                        dirTabBtn.classList.add('active');
+                        dirTabBtn.setAttribute('aria-selected', 'true');
+                    }
+                    if (eventsTabBtn) {
+                        eventsTabBtn.classList.remove('active');
+                        eventsTabBtn.setAttribute('aria-selected', 'false');
+                    }
+                    if (dirPane) {
+                        dirPane.style.display = '';
+                        dirPane.classList.add('active');
+                    }
+                    if (eventsPane) {
+                        eventsPane.style.display = 'none';
+                        eventsPane.classList.remove('active');
+                    }
+                    if (eventsActions) eventsActions.style.display = 'none';
+                }
+            }
+
+            if (eventsTabBtn) eventsTabBtn.addEventListener('click', () => switchTab('events'));
+            if (dirTabBtn) dirTabBtn.addEventListener('click', () => switchTab('directory'));
+
+            const cmdCountEl = document.getElementById('asideCommandsCount');
+            if (cmdCountEl && window.COMMAND_DIRECTORY) {
+                cmdCountEl.textContent = window.COMMAND_DIRECTORY.length;
+            }
+        }
+
+        function renderCommandFilters() {
+            const pillsContainer = document.getElementById('cmddirFilterPills');
+            if (!pillsContainer) return;
+
+            const categories = window.COMMAND_DIRECTORY_CATEGORIES || [];
+            const commands = window.COMMAND_DIRECTORY || [];
+
+            pillsContainer.innerHTML = categories.map((cat) => {
+                const count = cat.id === 'all'
+                    ? commands.length
+                    : commands.filter((c) => c.category === cat.id).length;
+                const isActive = activeCmdCat === cat.id ? 'active' : '';
+                return `
+                    <button type="button" class="filter-pill ${isActive}" data-cmd-cat="${cat.id}">
+                        <span>${cat.icon}</span> <span>${cat.label}</span> (<span class="tab-count">${count}</span>)
+                    </button>
+                `;
+            }).join('');
+
+            pillsContainer.addEventListener('click', (e) => {
+                const btn = e.target.closest('[data-cmd-cat]');
+                if (!btn) return;
+                activeCmdCat = btn.dataset.cmdCat;
+                pillsContainer.querySelectorAll('.filter-pill').forEach((el) => el.classList.remove('active'));
+                btn.classList.add('active');
+                renderCommandDirectory();
+            });
+        }
+
+        function renderCommandDirectory() {
+            const listEl = document.getElementById('cmddirList');
+            if (!listEl) return;
+
+            const allCommands = window.COMMAND_DIRECTORY || [];
+            const categories = window.COMMAND_DIRECTORY_CATEGORIES || [];
+            const catMap = new Map(categories.map((c) => [c.id, c]));
+
+            const q = cmdSearchQuery.toLowerCase();
+
+            const filtered = allCommands.filter((cmd) => {
+                if (activeCmdCat !== 'all' && cmd.category !== activeCmdCat) {
+                    return false;
+                }
+                if (!q) return true;
+                const hay = [
+                    cmd.title,
+                    cmd.command,
+                    cmd.desc,
+                    cmd.category,
+                    Array.isArray(cmd.tags) ? cmd.tags.join(' ') : ''
+                ].join(' ').toLowerCase();
+                return hay.includes(q);
+            });
+
+            if (filtered.length === 0) {
+                listEl.innerHTML = `
+                    <div style="padding:32px 16px; text-align:center; color:var(--text-muted);">
+                        <div style="font-size:24px; margin-bottom:8px;">🔍</div>
+                        <strong style="display:block; color:var(--text-primary); margin-bottom:4px;">No matching commands found</strong>
+                        <span style="font-size:12px;">Try adjusting your search query or switching to another category.</span>
+                    </div>
+                `;
+                return;
+            }
+
+            listEl.innerHTML = filtered.map((cmd) => {
+                const cat = catMap.get(cmd.category);
+                const catLabel = cat ? cat.label : cmd.category;
+                const catClass = (cat && cat.badgeClass) ? cat.badgeClass : ('cat-' + cmd.category);
+
+                return `
+                    <div class="cmddir-item" data-cmd-id="${cmd.id}">
+                        <div class="cmddir-item-header">
+                            <div class="cmddir-item-title-wrap">
+                                <span class="cat-badge ${catClass}">${App.escapeHtml(catLabel)}</span>
+                                <strong class="cmddir-item-title">${App.escapeHtml(cmd.title)}</strong>
+                            </div>
+                            ${cmd.suggestSudo ? `<span class="sudo-tag" title="Command typically requires sudo/root access">sudo</span>` : ''}
+                        </div>
+                        ${cmd.desc ? `<p class="cmddir-item-desc">${App.escapeHtml(cmd.desc)}</p>` : ''}
+                        <div class="cmddir-code-wrap">
+                            <code class="cmddir-code" title="${App.escapeHtml(cmd.command)}">${App.escapeHtml(cmd.command)}</code>
+                            <button type="button" class="cmddir-copy-btn" data-copy-cmd="${App.escapeHtml(cmd.command)}" title="Copy command to clipboard">
+                                📋
+                            </button>
+                        </div>
+                        <div class="cmddir-item-actions">
+                            <button type="button" class="btn btn-xs cmddir-run-btn" data-action="run-cmd" data-id="${cmd.id}" data-admin="false" title="Edit &amp; Run command">
+                                <span>▶</span> <span>Run</span>
+                            </button>
+                            <button type="button" class="btn btn-xs cmddir-admin-btn" data-action="run-cmd" data-id="${cmd.id}" data-admin="true" title="Edit &amp; Run with sudo (Admin privileges)">
+                                <span>⚡</span> <span>Run as Admin</span>
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // =========================================================================
+        // Command Execution & Confirmation Modal Controller
+        // =========================================================================
+        function initCommandRunModal() {
+            const modal = document.getElementById('commandRunModal');
+            if (!modal) return null;
+
+            const projectSelect = document.getElementById('execModalProjectSelect');
+            const envBadge = document.getElementById('execModalEnvBadge');
+            const targetHostEl = document.getElementById('execProjectTarget');
+            const targetDirEl = document.getElementById('execProjectDir');
+            const prodWarningEl = document.getElementById('execProdWarning');
+            const sudoToggle = document.getElementById('execModalSudoToggle');
+            const cmdTextarea = document.getElementById('execModalCmdText');
+            const cmdDesc = document.getElementById('execModalCmdDesc');
+            const closeBtn = document.getElementById('execModalCloseBtn');
+            const cancelBtn = document.getElementById('execModalCancelBtn');
+            const submitBtn = document.getElementById('execModalSubmitBtn');
+            const submitLabel = document.getElementById('execModalSubmitLabel');
+            const terminalWrap = document.getElementById('execModalTerminalWrap');
+            const terminalOutput = document.getElementById('execModalOutput');
+            const terminalStatus = document.getElementById('execTerminalStatus');
+            const terminalTimer = document.getElementById('execTerminalTimer');
+            const copyOutputBtn = document.getElementById('execCopyOutputBtn');
+            const clearOutputBtn = document.getElementById('execClearOutputBtn');
+
+            function populateProjectOptions() {
+                if (!projectSelect) return;
+                const lastChosenId = localStorage.getItem('deployer_last_target_project_id');
+                const currentVal = projectSelect.value || lastChosenId;
+
+                projectSelect.innerHTML = projects.map((p) => {
+                    const envTag = `[${p.environment.toUpperCase()}]`;
+                    return `<option value="${p.id}">${App.escapeHtml(p.name)} ${envTag} &bull; ${App.escapeHtml(p.ssh_username)}@${App.escapeHtml(p.ssh_host)}</option>`;
+                }).join('');
+
+                const hasPrev = projects.some((p) => String(p.id) === String(currentVal));
+                if (hasPrev) {
+                    projectSelect.value = String(currentVal);
+                } else if (projects.length > 0) {
+                    projectSelect.value = String(projects[0].id);
+                }
+                updateProjectContext();
+            }
+
+            function updateProjectContext() {
+                if (!projectSelect) return;
+                const pid = Number(projectSelect.value);
+                const proj = projects.find((p) => p.id === pid);
+                if (!proj) return;
+
+                localStorage.setItem('deployer_last_target_project_id', String(proj.id));
+
+                if (envBadge) {
+                    envBadge.className = 'badge env-' + proj.environment;
+                    envBadge.textContent = proj.environment;
+                }
+                if (targetHostEl) {
+                    targetHostEl.textContent = `${proj.ssh_username}@${proj.ssh_host}:${proj.ssh_port}`;
+                }
+                if (targetDirEl) {
+                    targetDirEl.textContent = `dir: ${proj.remote_path || '~ ($HOME)'}`;
+                }
+                if (prodWarningEl) {
+                    prodWarningEl.style.display = (proj.environment === 'production') ? 'flex' : 'none';
+                }
+            }
+
+            if (projectSelect) {
+                projectSelect.addEventListener('change', updateProjectContext);
+            }
+
+            function updateSubmitButtonLabel() {
+                if (!submitBtn || !submitLabel) return;
+                if (sudoToggle && sudoToggle.checked) {
+                    submitLabel.textContent = 'Run as Admin (sudo)';
+                    submitBtn.className = 'btn btn-warning';
+                } else {
+                    submitLabel.textContent = 'Run Command';
+                    submitBtn.className = 'btn btn-primary';
+                }
+            }
+
+            if (sudoToggle) {
+                sudoToggle.addEventListener('change', () => {
+                    if (!cmdTextarea) return;
+                    const raw = cmdTextarea.value.trim();
+                    const hasSudo = raw.startsWith('sudo ');
+                    if (sudoToggle.checked && !hasSudo) {
+                        cmdTextarea.value = 'sudo ' + raw;
+                    } else if (!sudoToggle.checked && hasSudo) {
+                        cmdTextarea.value = raw.replace(/^sudo\s+/, '');
+                    }
+                    updateSubmitButtonLabel();
+                });
+            }
+
+            if (cmdTextarea) {
+                cmdTextarea.addEventListener('input', () => {
+                    const raw = cmdTextarea.value.trim();
+                    const hasSudo = raw.startsWith('sudo ');
+                    if (sudoToggle && sudoToggle.checked !== hasSudo) {
+                        sudoToggle.checked = hasSudo;
+                        updateSubmitButtonLabel();
+                    }
+                });
+            }
+
+            function openModalForCommand(commandObj, asAdmin = false) {
+                populateProjectOptions();
+
+                let cmd = (commandObj && commandObj.command) ? commandObj.command : '';
+                if (asAdmin && !cmd.startsWith('sudo ')) {
+                    cmd = 'sudo ' + cmd;
+                }
+
+                if (cmdTextarea) {
+                    cmdTextarea.value = cmd;
+                }
+                if (sudoToggle) {
+                    sudoToggle.checked = cmd.startsWith('sudo ');
+                }
+                updateSubmitButtonLabel();
+
+                if (cmdDesc) {
+                    if (commandObj && commandObj.desc) {
+                        cmdDesc.textContent = commandObj.desc;
+                        cmdDesc.style.display = 'block';
+                    } else {
+                        cmdDesc.style.display = 'none';
+                    }
+                }
+
+                // Reset terminal display
+                if (terminalWrap) terminalWrap.style.display = 'none';
+                if (terminalOutput) terminalOutput.textContent = 'Ready to execute.';
+                if (terminalStatus) terminalStatus.innerHTML = '';
+                if (terminalTimer) terminalTimer.textContent = '';
+                execModalRawOutput = '';
+                execModalIsRunning = false;
+
+                if (submitBtn) submitBtn.disabled = false;
+                if (cancelBtn) cancelBtn.textContent = 'Cancel';
+
+                modal.style.display = 'flex';
+                void modal.offsetWidth;
+                modal.classList.add('open');
+                modal.setAttribute('aria-hidden', 'false');
+
+                setTimeout(() => {
+                    if (cmdTextarea) {
+                        cmdTextarea.focus();
+                        cmdTextarea.setSelectionRange(cmdTextarea.value.length, cmdTextarea.value.length);
+                    }
+                }, 80);
+            }
+
+            function closeModal() {
+                if (execModalIsRunning) {
+                    if (!window.confirm('Command is currently running on the server. Close console window? (The background task will continue on the remote host).')) {
+                        return;
+                    }
+                }
+                if (execModalTimerInterval) {
+                    clearInterval(execModalTimerInterval);
+                    execModalTimerInterval = null;
+                }
+                modal.classList.remove('open');
+                modal.setAttribute('aria-hidden', 'true');
+                setTimeout(() => {
+                    modal.style.display = 'none';
+                }, 180);
+            }
+
+            if (closeBtn) closeBtn.addEventListener('click', closeModal);
+            if (cancelBtn) cancelBtn.addEventListener('click', closeModal);
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) closeModal();
+            });
+
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && modal.classList.contains('open')) {
+                    closeModal();
+                }
+            });
+
+            if (copyOutputBtn) {
+                copyOutputBtn.addEventListener('click', () => {
+                    const text = execModalRawOutput || (terminalOutput ? terminalOutput.textContent : '');
+                    navigator.clipboard.writeText(text).then(() => App.toast('Console output copied.', 'success'));
+                });
+            }
+
+            if (clearOutputBtn) {
+                clearOutputBtn.addEventListener('click', () => {
+                    if (execModalIsRunning) return;
+                    execModalRawOutput = '';
+                    if (terminalOutput) terminalOutput.textContent = 'Cleared.\n';
+                    if (terminalTimer) terminalTimer.textContent = '';
+                    if (terminalStatus) terminalStatus.innerHTML = '';
+                });
+            }
+
+            if (submitBtn) {
+                submitBtn.addEventListener('click', async () => {
+                    if (execModalIsRunning) return;
+
+                    const pid = Number(projectSelect ? projectSelect.value : 0);
+                    const proj = projects.find((p) => p.id === pid);
+                    if (!proj) {
+                        App.toast('Please select a target project first.', 'warning');
+                        return;
+                    }
+
+                    const rawCmd = cmdTextarea ? cmdTextarea.value.trim() : '';
+                    if (!rawCmd) {
+                        App.toast('Command text cannot be empty.', 'warning');
+                        if (cmdTextarea) cmdTextarea.focus();
+                        return;
+                    }
+
+                    // If production target, prompt confirmation
+                    if (proj.environment === 'production') {
+                        const confirmed = await App.confirmAction({
+                            title: 'Execute on PRODUCTION Server?',
+                            subtitle: `${proj.name} (${proj.ssh_username}@${proj.ssh_host})`,
+                            message: `You are about to execute the following command live on your production server:`,
+                            codeSnippet: rawCmd,
+                            warning: 'Caution: This targets your live production environment. Database changes or service reloads may affect live users.',
+                            confirmText: 'Yes, Execute on Production',
+                            confirmClass: 'btn-danger',
+                            icon: '⚠️',
+                            iconVariant: 'danger',
+                        });
+                        if (!confirmed) return;
+                    }
+
+                    execModalIsRunning = true;
+                    submitBtn.disabled = true;
+                    if (cancelBtn) cancelBtn.textContent = 'Close';
+
+                    if (terminalWrap) terminalWrap.style.display = 'block';
+                    execModalRawOutput = `[SSH] Connecting to ${proj.ssh_username}@${proj.ssh_host}:${proj.ssh_port}...\n`;
+                    if (terminalOutput) {
+                        terminalOutput.innerHTML = App.ansiToHtml(execModalRawOutput);
+                    }
+                    if (terminalStatus) {
+                        terminalStatus.innerHTML = App.statusBadgeHtml('running');
+                    }
+
+                    const startT = performance.now();
+                    if (terminalTimer) terminalTimer.textContent = '0.0s';
+                    if (execModalTimerInterval) clearInterval(execModalTimerInterval);
+                    execModalTimerInterval = setInterval(() => {
+                        if (terminalTimer) {
+                            terminalTimer.textContent = ((performance.now() - startT) / 1000).toFixed(1) + 's';
+                        }
+                    }, 100);
+
+                    try {
+                        const finalPacket = await App.streamExecute({
+                            project_id: proj.id,
+                            mode: 'adhoc_command',
+                            adhoc_command: rawCmd
+                        }, (pkt) => {
+                            switch (pkt.type) {
+                                case 'init':
+                                case 'connected':
+                                case 'aborted':
+                                    execModalRawOutput += pkt.message + '\n';
+                                    if (terminalOutput) {
+                                        terminalOutput.innerHTML = App.ansiToHtml(execModalRawOutput);
+                                        terminalOutput.scrollTop = terminalOutput.scrollHeight;
+                                    }
+                                    break;
+                                case 'step_start':
+                                    execModalRawOutput += pkt.message + '\n';
+                                    if (terminalOutput) {
+                                        terminalOutput.innerHTML = App.ansiToHtml(execModalRawOutput);
+                                        terminalOutput.scrollTop = terminalOutput.scrollHeight;
+                                    }
+                                    break;
+                                case 'chunk':
+                                    execModalRawOutput += (pkt.data || '');
+                                    if (terminalOutput) {
+                                        terminalOutput.innerHTML = App.ansiToHtml(execModalRawOutput);
+                                        terminalOutput.scrollTop = terminalOutput.scrollHeight;
+                                    }
+                                    break;
+                                case 'step_end':
+                                    const pfx = execModalRawOutput.endsWith('\n') ? '' : '\n';
+                                    execModalRawOutput += pfx + pkt.message + '\n';
+                                    if (terminalOutput) {
+                                        terminalOutput.innerHTML = App.ansiToHtml(execModalRawOutput);
+                                        terminalOutput.scrollTop = terminalOutput.scrollHeight;
+                                    }
+                                    break;
+                                case 'error':
+                                    execModalRawOutput += '\n[SSH ERROR] ' + pkt.message + '\n';
+                                    if (terminalOutput) {
+                                        terminalOutput.innerHTML = App.ansiToHtml(execModalRawOutput);
+                                        terminalOutput.scrollTop = terminalOutput.scrollHeight;
+                                    }
+                                    break;
+                                case 'complete':
+                                    execModalRawOutput += '\n[' + pkt.status.toUpperCase() + '] ' + pkt.title + '\n';
+                                    if (terminalOutput) {
+                                        terminalOutput.innerHTML = App.ansiToHtml(execModalRawOutput);
+                                        terminalOutput.scrollTop = terminalOutput.scrollHeight;
+                                    }
+                                    break;
+                            }
+                        });
+
+                        if (execModalTimerInterval) {
+                            clearInterval(execModalTimerInterval);
+                            execModalTimerInterval = null;
+                        }
+
+                        if (finalPacket) {
+                            if (terminalTimer && finalPacket.duration_ms !== undefined) {
+                                terminalTimer.textContent = App.formatDuration(finalPacket.duration_ms);
+                            }
+                            if (terminalStatus) {
+                                terminalStatus.innerHTML = App.statusBadgeHtml(finalPacket.status);
+                            }
+                            if (finalPacket.status === 'success') {
+                                App.toast(`Command succeeded on "${proj.name}".`, 'success');
+                            } else {
+                                App.toast(`Command failed on "${proj.name}" (exit ${finalPacket.exit_code ?? 'non-zero'}).`, 'error');
+                            }
+                        } else {
+                            if (terminalStatus) terminalStatus.innerHTML = App.statusBadgeHtml('info');
+                        }
+                    } catch (err) {
+                        if (execModalTimerInterval) {
+                            clearInterval(execModalTimerInterval);
+                            execModalTimerInterval = null;
+                        }
+                        execModalRawOutput += '\n[ERROR] ' + err.message + '\n';
+                        if (terminalOutput) {
+                            terminalOutput.innerHTML = App.ansiToHtml(execModalRawOutput);
+                        }
+                        if (terminalStatus) {
+                            terminalStatus.innerHTML = App.statusBadgeHtml('failed');
+                        }
+                        App.toast('Execution error: ' + err.message, 'error');
+                    } finally {
+                        execModalIsRunning = false;
+                        submitBtn.disabled = false;
+                        if (cancelBtn) cancelBtn.textContent = 'Done / Close';
+
+                        // Refresh global events in background so newly run command appears in the Events tab
+                        try {
+                            const evRes = await App.apiGet('list_events', { limit: 30 });
+                            if (evRes && evRes.items) {
+                                globalEvents = evRes.items;
+                                renderGlobalEvents();
+                            }
+                        } catch (ignore) {}
+                    }
+                });
+            }
+
+            return {
+                open: openModalForCommand,
+                populateProjects: populateProjectOptions
+            };
+        }
+
+        // Initialize Command Directory and Aside Tabs
+        cmdRunModal = initCommandRunModal();
+        initAsideTabs();
+        renderCommandFilters();
+        renderCommandDirectory();
+
+        const cmddirListEl = document.getElementById('cmddirList');
+        if (cmddirListEl) {
+            cmddirListEl.addEventListener('click', (e) => {
+                const copyBtn = e.target.closest('[data-copy-cmd]');
+                if (copyBtn) {
+                    e.stopPropagation();
+                    const cmd = copyBtn.dataset.copyCmd;
+                    if (cmd) {
+                        navigator.clipboard.writeText(cmd).then(() => {
+                            App.toast('Command copied to clipboard.', 'success');
+                        });
+                    }
+                    return;
+                }
+
+                const runBtn = e.target.closest('button[data-action="run-cmd"]');
+                if (runBtn) {
+                    e.stopPropagation();
+                    const id = runBtn.dataset.id;
+                    const asAdmin = runBtn.dataset.admin === 'true';
+                    const allCommands = window.COMMAND_DIRECTORY || [];
+                    const cmdObj = allCommands.find((c) => c.id === id);
+                    if (cmdObj && cmdRunModal) {
+                        cmdRunModal.open(cmdObj, asAdmin);
+                    }
+                }
+            });
+        }
+
+        const cmdSearchInput = document.getElementById('cmddirSearchInput');
+        if (cmdSearchInput) {
+            cmdSearchInput.addEventListener('input', (e) => {
+                cmdSearchQuery = e.target.value.trim();
+                renderCommandDirectory();
+            });
+        }
     });
 })();
 
