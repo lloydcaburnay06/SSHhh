@@ -163,17 +163,25 @@ final class ProjectRepository
             throw new InvalidArgumentException('Project not found.');
         }
 
-        $password = !empty($row['ssh_password_encrypted'])
-            ? $this->crypto->decrypt((string) $row['ssh_password_encrypted'], 'ssh-password')
-            : '';
+        try {
+            $password = !empty($row['ssh_password_encrypted'])
+                ? $this->crypto->decrypt((string) $row['ssh_password_encrypted'], 'ssh-password')
+                : '';
 
-        $privateKey = !empty($row['ssh_private_key_encrypted'])
-            ? $this->crypto->decrypt((string) $row['ssh_private_key_encrypted'], 'ssh-private-key')
-            : '';
+            $privateKey = !empty($row['ssh_private_key_encrypted'])
+                ? $this->crypto->decrypt((string) $row['ssh_private_key_encrypted'], 'ssh-private-key')
+                : '';
 
-        $passphrase = !empty($row['ssh_passphrase_encrypted'])
-            ? $this->crypto->decrypt((string) $row['ssh_passphrase_encrypted'], 'ssh-passphrase')
-            : '';
+            $passphrase = !empty($row['ssh_passphrase_encrypted'])
+                ? $this->crypto->decrypt((string) $row['ssh_passphrase_encrypted'], 'ssh-passphrase')
+                : '';
+        } catch (\Throwable $e) {
+            throw new \RuntimeException(
+                "Could not decrypt SSH credentials for project '{$row['name']}'. The encryption key (storage/secret.key) was newly generated when cloning this repository. Please edit this project in the dashboard and re-enter its SSH password or private key.",
+                0,
+                $e
+            );
+        }
 
         return [
             'project'     => $this->sanitizeProjectRow($row),

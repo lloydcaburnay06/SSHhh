@@ -787,22 +787,30 @@ uptime 2>/dev/null
 echo "===MEMORY==="
 free -m 2>/dev/null || cat /proc/meminfo 2>/dev/null | head -n 4
 echo "===DISK==="
-df -hP %s 2>/dev/null || df -hP . 2>/dev/null || df -hP / 2>/dev/null
+df -hP __TARGET_DIR__ 2>/dev/null || df -hP . 2>/dev/null || df -hP / 2>/dev/null
+echo "===ACCOUNT_DISK==="
+du -sh ~ 2>/dev/null || du -sh . 2>/dev/null
+echo "===ACCOUNT_RSS==="
+ps -u $(whoami) -o rss --no-headers 2>/dev/null | awk '{sum+=$1} END {print sum}'
+echo "===ACCOUNT_PROCS==="
+ps -u $(whoami) --no-headers 2>/dev/null | wc -l
+echo "===ACCOUNT_PROCS_LIST==="
+ps -u $(whoami) -o pid,rss,%cpu,comm --sort=-rss --no-headers 2>/dev/null | head -n 6
 echo "===SERVICES==="
-for s in nginx apache2 caddy php8.4-fpm php8.3-fpm php8.2-fpm php8.1-fpm php8.0-fpm php7.4-fpm php-fpm mysql mariadb mysqld postgresql redis redis-server supervisor supervisord; do
-  if command -v systemctl >/dev/null 2>&1; then
+if command -v systemctl >/dev/null 2>&1; then
+  for s in nginx apache2 caddy php8.4-fpm php8.3-fpm php8.2-fpm php8.1-fpm php8.0-fpm php7.4-fpm php-fpm mysql mariadb mysqld postgresql redis redis-server supervisor supervisord; do
     st=$(systemctl is-active "$s" 2>/dev/null)
     if [ "$st" = "active" ] || [ "$st" = "failed" ] || [ "$st" = "activating" ]; then
       echo "$s:$st"
     fi
-  fi
-done
+  done
+fi
 echo "===PHP==="
 php -v 2>/dev/null | head -n 1
 BASH;
-            $fullCmd = sprintf($script, $targetDir);
+            $fullCmd = str_replace(["\r\n", "\r", '__TARGET_DIR__'], ["\n", "\n", $targetDir], $script);
             $rawOutput = (string) $ssh->exec($fullCmd);
-            return $this->parseServerPulseOutput($rawOutput, (string) $project['remote_path']);
+            return $this->parseServerPulseOutput($rawOutput, (string) $project['remote_path'], (string) $project['ssh_username']);
         } finally {
             if ($ssh->isConnected()) {
                 $ssh->disconnect();
@@ -1373,22 +1381,26 @@ BASH;
         }
     }
 
-    private function parseServerPulseOutput(string $raw, string $remotePath): array
+    private function parseServerPulseOutput(string $raw, string $remotePath, string $sshUsername = ''): array
     {
         $sections = [
-            'os'       => '',
-            'uptime'   => '',
-            'memory'   => '',
-            'disk'     => '',
-            'services' => '',
-            'php'      => '',
+            'os'                 => '',
+            'uptime'             => '',
+            'memory'             => '',
+            'disk'               => '',
+            'account_disk'       => '',
+            'account_rss'        => '',
+            'account_procs'      => '',
+            'account_procs_list' => '',
+            'services'           => '',
+            'php'                => '',
         ];
 
         $currentSection = null;
         $lines = explode("\n", $raw);
         foreach ($lines as $line) {
             $trim = trim($line);
-            if (preg_match('/^===([A-Z]+)===$/', $trim, $m)) {
+            if (preg_match('/^===([A-Z_]+)===$/', $trim, $m)) {
                 $secName = strtolower($m[1]);
                 $currentSection = array_key_exists($secName, $sections) ? $secName : null;
                 continue;
@@ -1449,6 +1461,41 @@ BASH;
             }
         }
 
+        // Account Plan Footprint
+        $accountDiskRaw = trim($sections['account_disk']);
+        $accountDisk = '0 MB';
+        if (preg_match('/^([0-9.]+[KMGT]?)/i', $accountDiskRaw, $adm)) {
+            $accountDisk = $adm[1];
+        }
+
+        $rssKb = (int) trim($sections['account_rss']);
+        $accountRamMb = (int) round($rssKb / 1024);
+
+        $accountProcCount = (int) trim($sections['account_procs']);
+
+        $accountProcsList = [];
+        foreach (explode("\n", trim($sections['account_procs_list'])) as $pLine) {
+            $pLine = trim($pLine);
+            if ($pLine === '') continue;
+            $parts = preg_split('/\s+/', $pLine, 4);
+            if (count($parts) >= 4) {
+                $accountProcsList[] = [
+                    'pid'     => $parts[0],
+                    'rss_mb'  => round(((int) $parts[1]) / 1024, 1),
+                    'cpu_pct' => (float) $parts[2],
+                    'command' => $parts[3],
+                ];
+            }
+        }
+
+        // Identify if host is a massive shared/cluster node
+        $isSharedHosting = false;
+        if (($ram['total_mb'] !== null && $ram['total_mb'] > 32768) ||
+            str_contains((string) ($disk['size'] ?? ''), 'T') ||
+            preg_match('/^u[0-9]{6,}/i', $sshUsername)) {
+            $isSharedHosting = true;
+        }
+
         $services = [];
         foreach (explode("\n", trim($sections['services'])) as $sLine) {
             $sLine = trim($sLine);
@@ -1464,13 +1511,31 @@ BASH;
         $php = trim($sections['php']);
 
         return [
-            'os'          => $os,
-            'uptime_raw'  => $uptimeRaw,
-            'cpu_load'    => $loadAverages,
-            'ram'         => $ram,
-            'disk'        => $disk,
-            'services'    => $services,
-            'php_version' => $php,
+            'is_shared_hosting' => $isSharedHosting,
+            'account'           => [
+                'username'      => $sshUsername,
+                'disk_used'     => $accountDisk,
+                'ram_used_mb'   => $accountRamMb,
+                'process_count' => $accountProcCount,
+                'processes'     => $accountProcsList,
+            ],
+            'host_node'         => [
+                'os'            => $os,
+                'uptime_raw'    => $uptimeRaw,
+                'cpu_load'      => $loadAverages,
+                'ram'           => $ram,
+                'disk'          => $disk,
+                'services'      => $services,
+                'php_version'   => $php,
+            ],
+            // Backwards-compatible root keys
+            'os'                => $os,
+            'uptime_raw'        => $uptimeRaw,
+            'cpu_load'          => $loadAverages,
+            'ram'               => $ram,
+            'disk'              => $disk,
+            'services'          => $services,
+            'php_version'       => $php,
         ];
     }
 

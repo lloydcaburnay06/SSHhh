@@ -1287,6 +1287,14 @@
         const footerCloseBtn = document.getElementById('pulseCloseFooterBtn');
         const refreshBtn = document.getElementById('pulseRefreshBtn');
 
+        const sharedNoticeEl = document.getElementById('pulseSharedNotice');
+        const accountUserBadgeEl = document.getElementById('pulseAccountUserBadge');
+        const accountDiskEl = document.getElementById('pulseAccountDiskVal');
+        const accountRamEl = document.getElementById('pulseAccountRamVal');
+        const accountProcsEl = document.getElementById('pulseAccountProcsVal');
+        const accountProcsContEl = document.getElementById('pulseAccountProcsContainer');
+        const accountProcsListEl = document.getElementById('pulseAccountProcsList');
+
         const osEl = document.getElementById('pulseOs');
         const phpEl = document.getElementById('pulsePhp');
         const uptimeEl = document.getElementById('pulseUptime');
@@ -1323,11 +1331,44 @@
                 if (!res || !res.result) throw new Error(res && res.error ? res.error : 'Failed to query server vitals');
                 const d = res.result;
 
-                osEl.textContent = d.os || 'Linux';
-                phpEl.textContent = d.php_version || 'PHP';
-                uptimeEl.textContent = d.uptime_raw ? d.uptime_raw.split(',')[0].replace(/^.*up\s+/i, 'up ') : '-';
+                const acct = d.account || {};
+                const host = d.host_node || d;
 
-                const loads = Array.isArray(d.cpu_load) ? d.cpu_load : [0, 0, 0];
+                if (sharedNoticeEl) {
+                    sharedNoticeEl.style.display = d.is_shared_hosting ? 'flex' : 'none';
+                }
+                if (accountUserBadgeEl) {
+                    accountUserBadgeEl.textContent = acct.username ? `@${acct.username}` : 'Isolated Account';
+                }
+                if (accountDiskEl) {
+                    accountDiskEl.textContent = acct.disk_used || '0 MB';
+                }
+                if (accountRamEl) {
+                    accountRamEl.textContent = `${acct.ram_used_mb || 0} MB`;
+                }
+                if (accountProcsEl) {
+                    accountProcsEl.textContent = `${acct.process_count || 0} running`;
+                }
+                if (accountProcsContEl && accountProcsListEl) {
+                    const procs = Array.isArray(acct.processes) ? acct.processes : [];
+                    if (procs.length > 0) {
+                        accountProcsContEl.style.display = 'block';
+                        accountProcsListEl.innerHTML = procs.map((p) => `
+                            <span style="display:inline-flex; align-items:center; gap:5px; background:rgba(255,255,255,0.06); border:1px solid var(--border-subtle); padding:3px 8px; border-radius:5px; font-size:11.5px; font-family:var(--font-mono);">
+                                <strong style="color:#e2e8f0;">${escapeHtml(p.command)}</strong>
+                                <span style="color:var(--text-muted); font-size:10.5px;">PID ${escapeHtml(p.pid)} &bull; ${p.rss_mb} MB &bull; ${p.cpu_pct}% CPU</span>
+                            </span>
+                        `).join('');
+                    } else {
+                        accountProcsContEl.style.display = 'none';
+                    }
+                }
+
+                osEl.textContent = host.os || 'Linux';
+                phpEl.textContent = host.php_version || 'PHP';
+                uptimeEl.textContent = host.uptime_raw ? host.uptime_raw.split(',')[0].replace(/^.*up\s+/i, 'up ') : '-';
+
+                const loads = Array.isArray(host.cpu_load) ? host.cpu_load : [0, 0, 0];
                 cpuValEl.textContent = Number(loads[0]).toFixed(2);
                 cpuPillsEl.innerHTML = `
                     <span style="background:rgba(255,255,255,0.06); padding:2px 6px; border-radius:4px;">1m: ${loads[0]}</span>
@@ -1335,23 +1376,25 @@
                     <span style="background:rgba(255,255,255,0.06); padding:2px 6px; border-radius:4px;">15m: ${loads[2]}</span>
                 `;
 
-                const ram = d.ram || {};
+                const ram = host.ram || {};
                 const ramPct = ram.used_percent !== null ? ram.used_percent : 0;
                 ramValEl.textContent = ramPct + '%';
-                ramTextEl.textContent = `${ram.used_mb || 0} MB / ${ram.total_mb || 0} MB used (${ram.free_mb || 0} MB free)`;
+                const hostTotalGb = ram.total_mb ? Math.round(ram.total_mb / 1024) + ' GB' : '0 MB';
+                const hostUsedGb = ram.used_mb ? Math.round(ram.used_mb / 1024) + ' GB' : '0 MB';
+                ramTextEl.textContent = `${hostUsedGb} / ${hostTotalGb} used (Cluster total: ${ram.total_mb || 0} MB)`;
                 ramBarEl.style.width = Math.min(100, Math.max(0, ramPct)) + '%';
                 ramBarEl.style.background = ramPct > 85 ? 'var(--danger)' : (ramPct > 70 ? 'var(--warning)' : 'var(--brand-accent)');
 
-                const disk = d.disk || {};
+                const disk = host.disk || {};
                 const diskPct = disk.used_percent !== null ? disk.used_percent : 0;
                 diskValEl.textContent = diskPct + '%';
                 diskTextEl.textContent = `${disk.used || '0'} / ${disk.size || '0'} used (${disk.avail || '0'} free on ${disk.mount || '/'})`;
                 diskBarEl.style.width = Math.min(100, Math.max(0, diskPct)) + '%';
                 diskBarEl.style.background = diskPct > 85 ? 'var(--danger)' : (diskPct > 70 ? 'var(--warning)' : 'var(--brand-accent)');
 
-                const svcs = Array.isArray(d.services) ? d.services : [];
+                const svcs = Array.isArray(host.services) ? host.services : [];
                 if (svcs.length === 0) {
-                    servicesListEl.innerHTML = '<span style="font-size:12px; color:var(--text-muted);">No managed systemd services detected or insufficient permissions.</span>';
+                    servicesListEl.innerHTML = '<span style="font-size:12px; color:var(--text-muted);">Managed at the host level (restricted inside shared tenant accounts).</span>';
                 } else {
                     servicesListEl.innerHTML = svcs.map((s) => {
                         const isAct = s.status === 'active';

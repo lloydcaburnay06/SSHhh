@@ -211,11 +211,7 @@ final class AccessGuard
                 // SUCCESS: Encrypt TOTP secret and permanently lock setup
                 $encryptedSecret = $crypto->encrypt($secret, 'totp-secret');
                 $stmt = $pdo->prepare(<<<'SQL'
-                    UPDATE `auth_state`
-                    SET `totp_secret_encrypted` = :secret,
-                        `is_configured` = 1,
-                        `configured_at` = NOW()
-                    WHERE `id` = 1
+                    INSERT INTO `auth_state` (`id`, `totp_secret_encrypted`, `is_configured`, `configured_at`) VALUES (1, :secret, 1, NOW()) ON DUPLICATE KEY UPDATE `totp_secret_encrypted` = VALUES(`totp_secret_encrypted`), `is_configured` = 1, `configured_at` = NOW()
                 SQL);
                 $stmt->execute([':secret' => $encryptedSecret]);
 
@@ -614,3 +610,5 @@ final class AccessGuard
         exit;
     }
 }
+
+

@@ -759,6 +759,156 @@ body.app-shell > .container {
     min-width: 0;
 }
 
+/* Compact Primary Summary on Project Card */
+.project-card-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 12px;
+    background: var(--bg-input);
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    font-size: 12px;
+    min-width: 0;
+}
+
+.project-summary-target {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary);
+}
+
+.summary-target-text {
+    font-family: var(--font-mono);
+    color: #cbd5e1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.summary-target-text strong {
+    color: #e2e8f0;
+}
+
+.summary-divider {
+    color: var(--text-muted);
+    font-size: 10px;
+    user-select: none;
+}
+
+.summary-branch-text {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: #34d399;
+}
+
+.summary-branch-text code {
+    font-family: var(--font-mono);
+    background: rgba(52, 211, 153, 0.12);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 11px;
+}
+
+.project-summary-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    font-size: 11.5px;
+}
+
+.project-summary-time {
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+/* Accordion Toggle Button */
+.accordion-toggle-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-weight: 500;
+    transition: all 0.15s ease;
+    user-select: none;
+}
+
+.accordion-toggle-btn .accordion-chevron {
+    font-size: 10px;
+    line-height: 1;
+    transition: transform 0.2s ease;
+}
+
+.accordion-toggle-btn.active,
+.accordion-toggle-btn[aria-expanded="true"] {
+    background: rgba(99, 102, 241, 0.15);
+    color: #a5b4fc;
+    border-color: rgba(99, 102, 241, 0.4);
+}
+
+/* Accordion Collapsible Panel */
+.project-card-accordion {
+    display: none;
+    flex-direction: column;
+    gap: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--border-subtle);
+    animation: accordionSlideDown 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.project-card.is-expanded .project-card-accordion {
+    display: flex;
+}
+
+@keyframes accordionSlideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-4px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Secondary Actions Section inside Accordion */
+.project-accordion-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 10px;
+    background: rgba(15, 23, 42, 0.5);
+    border: 1px solid var(--border-subtle);
+    border-radius: 7px;
+}
+
+.accordion-actions-title {
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+
+.accordion-actions-grid {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.accordion-actions-grid .btn {
+    font-size: 11.5px;
+    padding: 4px 9px;
+}
+
 .project-card-footer {
     margin-top: auto;
     padding-top: 12px;
@@ -2111,25 +2261,48 @@ body.app-shell > .container {
     }
 
     .project-card-footer {
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    .project-card-summary {
         flex-direction: column;
-        align-items: stretch;
-        gap: 10px;
+        align-items: flex-start;
+        gap: 6px;
+    }
+
+    .project-summary-status {
+        width: 100%;
+        justify-content: space-between;
     }
 
     .card-actions-left {
+        display: flex;
+        align-items: center;
+    }
+
+    .card-actions-right {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+    }
+
+    .card-actions-right .btn {
+        padding: 6px 12px;
+    }
+
+    .accordion-actions-grid {
         display: grid;
         grid-template-columns: repeat(2, 1fr);
         gap: 6px;
     }
 
-    .card-actions-left .btn-danger {
+    .accordion-actions-grid .btn-danger {
         grid-column: 1 / -1;
-    }
-
-    .card-actions-right,
-    .card-actions-right .btn {
-        width: 100%;
-        padding: 9px 14px;
     }
 
     .adhoc-box {

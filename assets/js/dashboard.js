@@ -6,6 +6,7 @@
     let globalEvents = (window.INITIAL_DASHBOARD_DATA && window.INITIAL_DASHBOARD_DATA.events) || [];
     let activeEnv = 'all';
     let searchQuery = '';
+    const expandedProjectIds = new Set();
 
     let activeAsideTab = 'events'; // 'events' | 'directory'
     let activeCmdCat = 'all';
@@ -98,9 +99,7 @@
 
             const appBadgeHtml = isDown
                 ? `<span class="badge badge-down"><span class="down-warning-dot" aria-hidden="true"></span> App Down</span>`
-                : (p.app_status === 'up'
-                    ? `<span class="badge badge-up">&#9679; App Up</span>`
-                    : '');
+                : '';
 
             const healthBadgeHtml = p.health_check_url ? (
                 p.last_health_status === 'healthy'
@@ -122,8 +121,10 @@
                 ? `<span class="badge" style="background:rgba(245,158,11,0.15); color:#fde68a; border:1px solid rgba(245,158,11,0.3);" title="Pre-deploy database snapshot enabled">🛡️ Auto DB Backup</span>`
                 : '';
 
+            const isExpanded = expandedProjectIds.has(Number(p.id));
+
             return `
-                <article class="project-card ${isDown ? 'app-down' : ''}" data-project-id="${p.id}">
+                <article class="project-card ${isDown ? 'app-down' : ''} ${isExpanded ? 'is-expanded' : ''}" data-project-id="${p.id}">
                     ${downStripHtml}
                     <div class="project-card-header">
                         <div class="project-card-heading-left">
@@ -148,64 +149,103 @@
                             ${strategyBadgeHtml}
                             ${webhookBadgeHtml}
                             ${backupBadgeHtml}
-                            <span class="badge env-${App.escapeHtml(p.environment)}">${App.escapeHtml(p.environment)}</span>
                         </div>
                     </div>
 
-                    <div class="meta-box">
-                        <div class="meta-row">
-                            <span class="meta-key">SSH Target</span>
-                            <span class="meta-val" title="${App.escapeHtml(p.ssh_username + '@' + p.ssh_host + ':' + p.ssh_port)}">
-                                ${App.escapeHtml(p.ssh_username)}@${App.escapeHtml(p.ssh_host)}:${p.ssh_port}
+                    <!-- Compact Primary Summary (Always visible on card) -->
+                    <div class="project-card-summary">
+                        <div class="project-summary-target">
+                            <span class="summary-target-text" title="${App.escapeHtml(p.ssh_username + '@' + p.ssh_host + ':' + p.ssh_port)}">
+                                💻 <strong>${App.escapeHtml(p.ssh_username)}@${App.escapeHtml(p.ssh_host)}</strong>
+                            </span>
+                            <span class="summary-divider">&bull;</span>
+                            <span class="summary-branch-text" title="Branch: ${App.escapeHtml(p.repo_branch)}">
+                                🌿 <code>${App.escapeHtml(p.repo_branch)}</code>
                             </span>
                         </div>
-                        <div class="meta-row">
-                            <span class="meta-key">Remote Directory</span>
-                            <span class="meta-val" title="${App.escapeHtml(p.remote_path || '$HOME')}">
-                                ${App.escapeHtml(p.remote_path || '~ ($HOME)')}
-                            </span>
-                        </div>
-                        <div class="meta-row">
-                            <span class="meta-key">Branch &amp; Vault</span>
-                            <span class="meta-val" style="color:#34d399;">
-                                ${App.escapeHtml(p.repo_branch)} &bull; ${authLabel}
-                            </span>
-                        </div>
-                        <div class="meta-row">
-                            <span class="meta-key">App State</span>
-                            <span class="meta-val">
-                                ${isDown
-                                    ? `<span style="color:#ef4444; font-weight:600;">🔴 Down (Maintenance)</span>`
-                                    : (p.app_status === 'up'
-                                        ? `<span style="color:#10b981; font-weight:600;">🟢 Up (Live)</span>`
-                                        : `<span style="color:var(--text-muted);">Unknown / Untracked</span>`)
-                                }
-                                ${p.app_status_updated_at ? `<span style="color:var(--text-muted); font-size:11px;"> &bull; since ${App.escapeHtml(p.app_status_updated_at)}</span>` : ''}
-                            </span>
-                        </div>
-                        <div class="meta-row">
-                            <span class="meta-key">Pipeline</span>
-                            <span class="meta-val">
-                                ${p.enabled_command_count} active / ${p.command_count} commands &bull; ${p.deployment_count} deploys
-                            </span>
+                        <div class="project-summary-status">
+                            ${App.statusBadgeHtml(p.last_deploy_status)}
+                            <span class="project-summary-time">${lastDeployText}</span>
                         </div>
                     </div>
 
-                    <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:12px;">
-                        ${App.statusBadgeHtml(p.last_deploy_status)}
-                        <span style="color:var(--text-muted);">${lastDeployText}</span>
+                    <!-- Accordion Collapsible (Reveals details & secondary actions) -->
+                    <div class="project-card-accordion" id="accordion-proj-${p.id}">
+                        <div class="meta-box">
+                            <div class="meta-row">
+                                <span class="meta-key">Environment</span>
+                                <span class="meta-val">
+                                    <span class="badge env-${App.escapeHtml(p.environment)}">${App.escapeHtml(p.environment)}</span>
+                                </span>
+                            </div>
+                            <div class="meta-row">
+                                <span class="meta-key">SSH Target</span>
+                                <span class="meta-val" title="${App.escapeHtml(p.ssh_username + '@' + p.ssh_host + ':' + p.ssh_port)}">
+                                    ${App.escapeHtml(p.ssh_username)}@${App.escapeHtml(p.ssh_host)}:${p.ssh_port}
+                                </span>
+                            </div>
+                            <div class="meta-row">
+                                <span class="meta-key">Remote Directory</span>
+                                <span class="meta-val" title="${App.escapeHtml(p.remote_path || '$HOME')}">
+                                    ${App.escapeHtml(p.remote_path || '~ ($HOME)')}
+                                </span>
+                            </div>
+                            <div class="meta-row">
+                                <span class="meta-key">Branch &amp; Vault</span>
+                                <span class="meta-val" style="color:#34d399;">
+                                    ${App.escapeHtml(p.repo_branch)} &bull; ${authLabel}
+                                </span>
+                            </div>
+                            <div class="meta-row">
+                                <span class="meta-key">App State</span>
+                                <span class="meta-val">
+                                    ${isDown
+                                        ? `<span style="color:#ef4444; font-weight:600;">🔴 Down (Maintenance)</span>`
+                                        : (p.app_status === 'up'
+                                            ? `<span style="color:#10b981; font-weight:600;">🟢 Up (Live)</span>`
+                                            : `<span style="color:var(--text-muted);">Unknown / Untracked</span>`)
+                                    }
+                                    ${p.app_status_updated_at ? `<span style="color:var(--text-muted); font-size:11px;"> &bull; since ${App.escapeHtml(p.app_status_updated_at)}</span>` : ''}
+                                </span>
+                            </div>
+                            <div class="meta-row">
+                                <span class="meta-key">Pipeline</span>
+                                <span class="meta-val">
+                                    ${p.enabled_command_count} active / ${p.command_count} commands &bull; ${p.deployment_count} deploys
+                                </span>
+                            </div>
+                            ${p.health_check_url ? `
+                            <div class="meta-row">
+                                <span class="meta-key">Health URL</span>
+                                <span class="meta-val" title="${App.escapeHtml(p.health_check_url)}">
+                                    ${App.escapeHtml(p.health_check_url)}
+                                </span>
+                            </div>
+                            ` : ''}
+                        </div>
+
+                        <div class="project-accordion-actions">
+                            <span class="accordion-actions-title">Additional Actions</span>
+                            <div class="accordion-actions-grid">
+                                <button type="button" class="btn btn-ghost btn-xs" data-action="edit" data-id="${p.id}">✏️ Edit</button>
+                                <button type="button" class="btn btn-ghost btn-xs" data-action="pulse" data-id="${p.id}" title="Inspect live CPU, RAM, Disk &amp; Services">🩺 Pulse</button>
+                                <button type="button" class="btn btn-ghost btn-xs" data-action="env" data-id="${p.id}" title="Directly inspect &amp; edit remote .env">📝 .env</button>
+                                <button type="button" class="btn btn-ghost btn-xs" data-action="releases" data-id="${p.id}" title="View historical releases &amp; 1-click rollback">⏪ Releases</button>
+                                <button type="button" class="btn btn-ghost btn-xs" data-action="duplicate" data-id="${p.id}" title="Duplicate project &amp; command template">📋 Duplicate</button>
+                                <button type="button" class="btn btn-ghost btn-xs" data-action="ssh" data-id="${p.id}">🔑 SSH Settings</button>
+                                <button type="button" class="btn btn-ghost btn-xs" data-action="test-ssh" data-id="${p.id}">⚡ Test SSH</button>
+                                <button type="button" class="btn btn-danger btn-xs" data-action="delete" data-id="${p.id}">🗑️ Delete</button>
+                            </div>
+                        </div>
                     </div>
 
+                    <!-- Important Primary Buttons Only -->
                     <div class="project-card-footer">
                         <div class="card-actions-left">
-                            <button type="button" class="btn btn-ghost btn-sm" data-action="edit" data-id="${p.id}">Edit</button>
-                            <button type="button" class="btn btn-ghost btn-sm" data-action="pulse" data-id="${p.id}" title="Inspect live CPU, RAM, Disk &amp; Services">🩺 Pulse</button>
-                            <button type="button" class="btn btn-ghost btn-sm" data-action="env" data-id="${p.id}" title="Directly inspect &amp; edit remote .env">📝 .env</button>
-                            <button type="button" class="btn btn-ghost btn-sm" data-action="releases" data-id="${p.id}" title="View historical releases &amp; 1-click rollback">⏪ Releases</button>
-                            <button type="button" class="btn btn-ghost btn-sm" data-action="duplicate" data-id="${p.id}" title="Duplicate project &amp; command template">Duplicate</button>
-                            <button type="button" class="btn btn-ghost btn-sm" data-action="ssh" data-id="${p.id}">SSH Settings</button>
-                            <button type="button" class="btn btn-ghost btn-sm" data-action="test-ssh" data-id="${p.id}">Test SSH</button>
-                            <button type="button" class="btn btn-danger btn-sm" data-action="delete" data-id="${p.id}">Delete</button>
+                            <button type="button" class="btn btn-ghost btn-sm accordion-toggle-btn ${isExpanded ? 'active' : ''}" data-action="toggle-details" data-id="${p.id}" aria-expanded="${isExpanded ? 'true' : 'false'}" title="${isExpanded ? 'Hide additional project details & actions' : 'Show additional project details & actions'}">
+                                <span class="accordion-toggle-text">${isExpanded ? 'Less' : 'Details'}</span>
+                                <span class="accordion-chevron">${isExpanded ? '&#9652;' : '&#9662;'}</span>
+                            </button>
                         </div>
                         <div class="card-actions-right">
                             <button type="button" class="btn btn-deploy btn-sm" data-action="run" data-id="${p.id}" title="Quick run all enabled deployment commands for this project">
@@ -403,7 +443,7 @@
             const card = e.target.closest('.project-card');
             if (!card) return;
             const isInteractiveOrSelectable = Boolean(
-                e.target.closest('a, button, input, select, textarea, .meta-box')
+                e.target.closest('a, button, input, select, textarea, .meta-box, .project-card-accordion, .project-card-summary')
             );
             if (isInteractiveOrSelectable) {
                 card.removeAttribute('draggable');
@@ -536,6 +576,31 @@
             if (!project) return;
 
             const action = btn.dataset.action;
+            if (action === 'toggle-details') {
+                const isNowExpanded = !expandedProjectIds.has(id);
+                if (isNowExpanded) {
+                    expandedProjectIds.add(id);
+                } else {
+                    expandedProjectIds.delete(id);
+                }
+                const cardEl = btn.closest('.project-card');
+                if (cardEl) {
+                    cardEl.classList.toggle('is-expanded', isNowExpanded);
+                    btn.setAttribute('aria-expanded', isNowExpanded ? 'true' : 'false');
+                    btn.classList.toggle('active', isNowExpanded);
+                    const textSpan = btn.querySelector('.accordion-toggle-text');
+                    if (textSpan) {
+                        textSpan.textContent = isNowExpanded ? 'Less' : 'Details';
+                    }
+                    const chevronSpan = btn.querySelector('.accordion-chevron');
+                    if (chevronSpan) {
+                        chevronSpan.innerHTML = isNowExpanded ? '&#9652;' : '&#9662;';
+                    }
+                    btn.title = isNowExpanded ? 'Hide additional project details & actions' : 'Show additional project details & actions';
+                }
+                return;
+            }
+
             if (action === 'run') {
                 if ((project.enabled_command_count || 0) === 0) {
                     App.toast(`No enabled commands found in "${project.name}". Click "Manage & Deploy" to configure commands first.`, 'warning');
