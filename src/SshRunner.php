@@ -720,6 +720,14 @@ final class SshRunner
     {
         return "'" . str_replace("'", "'\\''", $value) . "'";
     }
+    /**
+     * Normalizes a shell script to POSIX LF line endings and trims outer whitespace
+     * so Linux/macOS remote shells never encounter syntax errors from Windows CRLF (\r).
+     */
+    private function cleanScript(string $script): string
+    {
+        return str_replace(["\r\n", "\r"], "\n", trim($script));
+    }
 
     private function computeOpenSshFingerprint(string $publicHostKey): string
     {
@@ -929,12 +937,12 @@ fi
 if [ -f "\$TARGET_FILE" ]; then
     cp "\$TARGET_FILE" "\${TARGET_FILE}.backup.{$timestamp}" || exit 2
 fi
-echo '{$b64}' | base64 -d > "\$TARGET_FILE" || exit 3
+echo '{$b64}' | (base64 -d 2>/dev/null || base64 --decode) > "\$TARGET_FILE" || exit 3
 chmod 600 "\$TARGET_FILE" 2>/dev/null || true
 echo "SAVED:\$TARGET_FILE:\${TARGET_FILE}.backup.{$timestamp}"
 BASH;
 
-            $output = trim((string) $ssh->exec($script));
+            $output = trim((string) $ssh->exec($this->cleanScript($script)));
             $exitCode = $ssh->getExitStatus();
             if ($exitCode !== 0) {
                 throw new RuntimeException("Failed to save remote .env (exit code {$exitCode}): " . $output);
@@ -1053,7 +1061,7 @@ if [ -d "releases" ]; then
     ls -1 -dt 20* 2>/dev/null | head -n 25
 fi
 BASH;
-            $output = trim((string) $ssh->exec($script));
+            $output = trim((string) $ssh->exec($this->cleanScript($script)));
             $lines = array_filter(array_map('trim', explode("\n", $output)), static fn($l) => $l !== '');
             $currentRelease = '';
             $releases = [];
@@ -1161,7 +1169,7 @@ if command -v php >/dev/null 2>&1; then
 fi
 echo "ROLLBACK_OK"
 BASH;
-            $output = trim((string) $ssh->exec($script));
+            $output = trim((string) $ssh->exec($this->cleanScript($script)));
             if (!str_contains($output, 'ROLLBACK_OK')) {
                 throw new RuntimeException("Rollback failed: " . $output);
             }
@@ -1250,7 +1258,7 @@ fi
 echo "SKIPPED:No database found or dump utility unavailable."
 BASH;
 
-        $res = trim((string) $ssh->exec($backupScript));
+        $res = trim((string) $ssh->exec($this->cleanScript($backupScript)));
         $durationMs = (int) round((hrtime(true) - $start) / 1_000_000);
 
         if (str_starts_with($res, 'SUCCESS:')) {
@@ -1308,7 +1316,7 @@ ln -sfn "../../shared/.env" "releases/{$timestamp}/.env"
 echo "RELEASE_PREPARED:releases/{$timestamp}"
 BASH;
 
-        $out = trim((string) $ssh->exec($script));
+        $out = trim((string) $ssh->exec($this->cleanScript($script)));
         if (!str_contains($out, 'RELEASE_PREPARED')) {
             $warn = sprintf("[%s] [ATOMIC WARNING] Symlink prep issue: %s. Continuing in base directory.\n", date('H:i:s'), $out);
             $transcript[] = $warn;
@@ -1346,7 +1354,7 @@ fi
 echo "RELEASE_ACTIVE:{$timestamp}"
 BASH;
 
-        $out = trim((string) $ssh->exec($actScript));
+        $out = trim((string) $ssh->exec($this->cleanScript($actScript)));
         if (str_contains($out, 'RELEASE_ACTIVE')) {
             $this->projects->updateCurrentRelease((int) $project['id'], $timestamp);
             $msg = sprintf("[%s] [ATOMIC] Zero-downtime release %s activated successfully! 'current' symlink updated.\n", date('H:i:s'), $timestamp);
