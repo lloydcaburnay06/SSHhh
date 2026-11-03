@@ -232,10 +232,16 @@ final class EventLogger
         ];
     }
 
-    public function clearForProject(int $projectId, string $projectName): int
+    public function clearForProject(int $projectId, string $projectName, string $status = 'all'): int
     {
-        $stmt = $this->pdo->prepare('DELETE FROM `event_logs` WHERE `project_id` = :project_id');
-        $stmt->execute([':project_id' => $projectId]);
+        $sql = 'DELETE FROM `event_logs` WHERE `project_id` = :project_id';
+        $params = [':project_id' => $projectId];
+        if ($status === 'failed') {
+            $sql .= ' AND `status` = "failed"';
+        }
+
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute($params);
         $deleted = $stmt->rowCount();
 
         $this->log([
@@ -244,10 +250,35 @@ final class EventLogger
             'category'     => 'audit',
             'event_type'   => 'logs_cleared',
             'status'       => 'info',
-            'title'        => sprintf('Cleared %d historical event log entries', $deleted),
+            'title'        => $status === 'failed'
+                ? sprintf('Cleared %d historical failed/error event log entries', $deleted)
+                : sprintf('Cleared %d historical event log entries', $deleted),
         ]);
 
         return $deleted;
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function getProjectLogsExport(int $projectId, string $status = 'all'): array
+    {
+        $where = ['`project_id` = :project_id'];
+        $params = [':project_id' => $projectId];
+        if ($status === 'failed') {
+            $where[] = '`status` = "failed"';
+        }
+
+        $sql = 'SELECT * FROM `event_logs` WHERE ' . implode(' AND ', $where) . ' ORDER BY `id` DESC LIMIT 1000';
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute($params);
+
+        $items = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $items[] = $this->hydrateRow($row);
+        }
+
+        return $items;
     }
 
     /**

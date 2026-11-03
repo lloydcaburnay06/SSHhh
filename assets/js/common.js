@@ -1736,6 +1736,249 @@
         };
     }
 
+
+    // =========================================================================
+    // Remote Server Error Logs Modal Controller
+    // =========================================================================
+    function initRemoteLogsModal() {
+        const modal = document.getElementById('remoteLogsModal');
+        if (!modal) return;
+
+        const title = document.getElementById('remoteLogsModalTitle');
+        const subtitle = document.getElementById('remoteLogsModalSubtitle');
+        const loadingState = document.getElementById('remoteLogsLoadingState');
+        const errorState = document.getElementById('remoteLogsErrorState');
+        const errorMessage = document.getElementById('remoteLogsErrorMessage');
+        const contentState = document.getElementById('remoteLogsContentState');
+
+        const logSelect = document.getElementById('remoteLogSelect');
+        const customWrap = document.getElementById('remoteLogCustomInputWrap');
+        const customInput = document.getElementById('remoteLogCustomInput');
+        const applyCustomBtn = document.getElementById('applyCustomLogBtn');
+        const linesSelect = document.getElementById('remoteLogLinesSelect');
+        const filterInput = document.getElementById('remoteLogFilterInput');
+
+        const refreshBtn = document.getElementById('refreshRemoteLogBtn');
+        const copyBtn = document.getElementById('copyRemoteLogBtn');
+        const downloadBtn = document.getElementById('downloadRemoteLogBtn');
+        const clearBtn = document.getElementById('clearRemoteLogBtn');
+
+        const preEl = document.getElementById('remoteLogPre');
+        const statsText = document.getElementById('remoteLogStatsText');
+        const activeFileBadge = document.getElementById('remoteLogActiveFileBadge');
+
+        const closeBtn = document.getElementById('remoteLogsModalCloseBtn');
+        const footerCloseBtn = document.getElementById('remoteLogsCloseFooterBtn');
+
+        let currentProject = null;
+        let currentFile = null;
+        let fullRawContent = '';
+
+        function closeModal() {
+            modal.classList.remove('open');
+            modal.setAttribute('aria-hidden', 'true');
+            setTimeout(() => { modal.style.display = 'none'; }, 180);
+        }
+
+        if (closeBtn) closeBtn.addEventListener('click', closeModal);
+        if (footerCloseBtn) footerCloseBtn.addEventListener('click', closeModal);
+        modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+
+        async function fetchLogs(project, file = null, lines = null) {
+            loadingState.style.display = 'block';
+            errorState.style.display = 'none';
+            contentState.style.display = 'none';
+
+            const numLines = lines || (linesSelect ? parseInt(linesSelect.value, 10) : 300);
+
+            try {
+                const res = await apiPost('get_remote_logs', {
+                    project_id: project.id,
+                    file: file || currentFile,
+                    lines: numLines
+                });
+
+                if (!res || !res.result) throw new Error(res && res.error ? res.error : 'Failed to fetch remote logs');
+                const d = res.result;
+
+                currentFile = d.selected_file;
+                fullRawContent = d.content || '';
+
+                if (logSelect) {
+                    const logs = Array.isArray(d.available_logs) ? d.available_logs : [];
+                    let optionsHtml = '';
+                    let foundCurrent = false;
+
+                    logs.forEach(l => {
+                        const isSel = (l.path === currentFile);
+                        if (isSel) foundCurrent = true;
+                        optionsHtml += `<option value="${escapeHtml(l.path)}" ${isSel ? 'selected' : ''}>${escapeHtml(l.name)} (${escapeHtml(l.size)})</option>`;
+                    });
+
+                    optionsHtml += `<option value="__CUSTOM__" ${(!foundCurrent && currentFile) ? 'selected' : ''}>Custom path...</option>`;
+                    logSelect.innerHTML = optionsHtml;
+
+                    if (!foundCurrent && currentFile) {
+                        if (customWrap) customWrap.style.display = 'inline-flex';
+                        if (customInput) customInput.value = currentFile;
+                    } else {
+                        if (customWrap) customWrap.style.display = 'none';
+                    }
+                }
+
+                if (downloadBtn && currentFile) {
+                    downloadBtn.href = `api.php?action=download_remote_log&project_id=${project.id}&file=${encodeURIComponent(currentFile)}`;
+                }
+
+                renderLogContent();
+
+                if (statsText) {
+                    statsText.textContent = `Showing last ${d.line_count || 0} lines • File size: ${d.file_size || '0B'}`;
+                }
+                if (activeFileBadge) {
+                    activeFileBadge.textContent = currentFile ? `File: ${currentFile}` : '';
+                }
+
+                loadingState.style.display = 'none';
+                contentState.style.display = 'block';
+
+                if (preEl) {
+                    preEl.scrollTop = preEl.scrollHeight;
+                }
+            } catch (err) {
+                loadingState.style.display = 'none';
+                errorMessage.textContent = err.message;
+                errorState.style.display = 'block';
+            }
+        }
+
+        function renderLogContent() {
+            if (!preEl) return;
+            const filter = filterInput ? filterInput.value.trim().toLowerCase() : '';
+            if (!fullRawContent || fullRawContent.trim() === '') {
+                preEl.innerHTML = '<span style="color:var(--text-muted); font-style:italic;">(Log file is empty — no error records found)</span>';
+                return;
+            }
+
+            if (!filter) {
+                preEl.textContent = fullRawContent;
+                return;
+            }
+
+            const lines = fullRawContent.split('\n');
+            const matched = lines.filter(l => l.toLowerCase().includes(filter));
+            if (matched.length === 0) {
+                preEl.innerHTML = `<span style="color:var(--text-muted); font-style:italic;">(No lines match filter "${escapeHtml(filter)}")</span>`;
+            } else {
+                preEl.textContent = matched.join('\n');
+            }
+        }
+
+        if (logSelect) {
+            logSelect.addEventListener('change', () => {
+                const val = logSelect.value;
+                if (val === '__CUSTOM__') {
+                    if (customWrap) customWrap.style.display = 'inline-flex';
+                    if (customInput) customInput.focus();
+                } else {
+                    if (customWrap) customWrap.style.display = 'none';
+                    currentFile = val;
+                    if (currentProject) fetchLogs(currentProject, val);
+                }
+            });
+        }
+
+        if (applyCustomBtn && customInput) {
+            applyCustomBtn.addEventListener('click', () => {
+                const customPath = customInput.value.trim();
+                if (!customPath) return;
+                currentFile = customPath;
+                if (currentProject) fetchLogs(currentProject, customPath);
+            });
+            customInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    applyCustomBtn.click();
+                }
+            });
+        }
+
+        if (linesSelect) {
+            linesSelect.addEventListener('change', () => {
+                if (currentProject) fetchLogs(currentProject, currentFile, parseInt(linesSelect.value, 10));
+            });
+        }
+
+        if (filterInput) {
+            filterInput.addEventListener('input', renderLogContent);
+        }
+
+        if (refreshBtn) {
+            refreshBtn.addEventListener('click', () => {
+                if (currentProject) fetchLogs(currentProject, currentFile);
+            });
+        }
+
+        if (copyBtn) {
+            copyBtn.addEventListener('click', () => {
+                if (!preEl || !preEl.textContent) return;
+                navigator.clipboard.writeText(preEl.textContent).then(() => {
+                    toast('Log content copied to clipboard!', 'info');
+                }).catch(() => {
+                    toast('Failed to copy to clipboard', 'error');
+                });
+            });
+        }
+
+        if (clearBtn) {
+            clearBtn.addEventListener('click', async () => {
+                if (!currentProject || !currentFile) return;
+                const confirmed = await confirmAction({
+                    title: 'Clear / Truncate Remote Log?',
+                    subtitle: `${currentProject.name} — ${currentFile}`,
+                    message: `Are you sure you want to clear <strong>${escapeHtml(currentFile)}</strong> on the remote server?<br><br>The file will be truncated to 0 bytes so new incoming errors are easily spotted.`,
+                    warning: 'This action is immediate and cannot be undone on the server.',
+                    confirmText: 'Yes, Clear Log',
+                    confirmClass: 'btn-danger',
+                    icon: '🗑️',
+                    iconVariant: 'danger'
+                });
+                if (!confirmed) return;
+
+                const origText = clearBtn.textContent;
+                clearBtn.disabled = true;
+                clearBtn.textContent = 'Clearing...';
+
+                try {
+                    const res = await apiPost('clear_remote_log', {
+                        project_id: currentProject.id,
+                        file: currentFile
+                    });
+                    toast(res.result && res.result.message ? res.result.message : 'Log file cleared successfully.', 'info');
+                    await fetchLogs(currentProject, currentFile);
+                } catch (err) {
+                    toast('Failed to clear remote log: ' + err.message, 'error');
+                } finally {
+                    clearBtn.disabled = false;
+                    clearBtn.textContent = origText;
+                }
+            });
+        }
+
+        window.DeployerApp.openRemoteLogsModal = function (proj, preferredFile = null) {
+            if (!proj || !proj.id) return;
+            currentProject = proj;
+            currentFile = preferredFile;
+            title.textContent = `Remote Server Logs — ${proj.name}`;
+            subtitle.textContent = `${proj.ssh_username}@${proj.ssh_host} (${(proj.environment || '').toUpperCase()})`;
+            modal.style.display = 'flex';
+            void modal.offsetWidth;
+            modal.classList.add('open');
+            modal.setAttribute('aria-hidden', 'false');
+            fetchLogs(proj, preferredFile);
+        };
+    }
+
     window.DeployerApp = {
         escapeHtml,
         ansiToHtml,
@@ -1755,6 +1998,7 @@
         initServerPulseModal();
         initRemoteEnvModal();
         initReleasesModal();
+        initRemoteLogsModal();
         initPwa();
         initStandaloneNavigationTrap();
     });

@@ -231,6 +231,8 @@
                                 <button type="button" class="btn btn-ghost btn-xs" data-action="pulse" data-id="${p.id}" title="Inspect live CPU, RAM, Disk &amp; Services">🩺 Pulse</button>
                                 <button type="button" class="btn btn-ghost btn-xs" data-action="env" data-id="${p.id}" title="Directly inspect &amp; edit remote .env">📝 .env</button>
                                 <button type="button" class="btn btn-ghost btn-xs" data-action="releases" data-id="${p.id}" title="View historical releases &amp; 1-click rollback">⏪ Releases</button>
+                                <button type="button" class="btn btn-ghost btn-xs" data-action="remote-logs" data-id="${p.id}" title="Inspect, download &amp; clear remote application error logs (e.g. laravel.log)">📜 Remote Logs</button>
+                                <a href="api.php?action=download_project_events&project_id=${p.id}&status=failed" class="btn btn-ghost btn-xs" title="Download deployer execution error history (.log)" onclick="event.stopPropagation();">📥 Error Logs</a>
                                 <button type="button" class="btn btn-ghost btn-xs" data-action="duplicate" data-id="${p.id}" title="Duplicate project &amp; command template">📋 Duplicate</button>
                                 <button type="button" class="btn btn-ghost btn-xs" data-action="ssh" data-id="${p.id}">🔑 SSH Settings</button>
                                 <button type="button" class="btn btn-ghost btn-xs" data-action="test-ssh" data-id="${p.id}">⚡ Test SSH</button>

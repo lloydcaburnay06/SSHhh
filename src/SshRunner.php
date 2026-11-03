@@ -972,6 +972,297 @@ BASH;
     }
 
     /**
+     * Discovers remote application error logs and fetches the tail of a specified or default log.
+     *
+     * @return array<string, mixed>
+     */
+    public function getRemoteLogs(int $projectId, ?string $requestedFile = null, int $lines = 300): array
+    {
+        $bundle = $this->projects->getWithDecryptedCredentials($projectId);
+        $project = $bundle['project'];
+        $remotePath = trim((string) $project['remote_path']);
+        if ($remotePath === '') {
+            $remotePath = '~';
+        }
+
+        $lines = max(50, min(1500, $lines));
+
+        $conn = $this->connect(
+            host: (string) $project['ssh_host'],
+            port: (int) $project['ssh_port'],
+            username: (string) $project['ssh_username'],
+            authType: (string) $project['ssh_auth_type'],
+            password: $bundle['password'],
+            privateKey: $bundle['private_key'],
+            passphrase: $bundle['passphrase'],
+            timeout: max(5, min(20, (int) ($project['ssh_timeout'] ?? 10)))
+        );
+
+        /** @var \phpseclib3\Net\SSH2 $ssh */
+        $ssh = $conn['ssh'];
+
+        try {
+            $cdTarget = $this->buildCdTarget($remotePath);
+
+            $scanScript = <<<BASH
+cd {$cdTarget} 2>/dev/null || exit 1
+for d in "storage/logs" "shared/storage/logs" "logs"; do
+    if [ -d "\$d" ]; then
+        find "\$d" -maxdepth 2 -type f \( -name "*.log" -o -name "error_log" \) 2>/dev/null
+    fi
+done
+if [ -f "error_log" ]; then
+    echo "error_log"
+fi
+if [ -f "../error_log" ]; then
+    echo "../error_log"
+fi
+if [ -d "../logs" ]; then
+    find "../logs" -maxdepth 1 -type f \( -name "*.log" -o -name "error_log" \) 2>/dev/null
+fi
+BASH;
+            $scanOut = trim((string) $ssh->exec($this->cleanScript($scanScript)));
+            $rawFiles = array_filter(array_map('trim', explode("\n", $scanOut)), static fn($f) => $f !== '');
+            $rawFiles = array_unique($rawFiles);
+
+            $availableLogs = [];
+            foreach ($rawFiles as $rf) {
+                $statCmd = "cd {$cdTarget} && [ -f '{$rf}' ] && ls -lh '{$rf}' 2>/dev/null | awk '{print \$5 \" \" \$6 \" \" \$7 \" \" \$8}'";
+                $statRes = trim((string) $ssh->exec($statCmd));
+                $availableLogs[] = [
+                    'path' => $rf,
+                    'name' => basename($rf),
+                    'size' => strtok($statRes, ' ') ?: '0B',
+                    'meta' => $statRes,
+                ];
+            }
+
+            $selectedFile = null;
+            if ($requestedFile !== null && $requestedFile !== '') {
+                $cleanReq = $this->sanitizeLogPath($requestedFile);
+                if ($cleanReq !== null) {
+                    $selectedFile = $cleanReq;
+                }
+            }
+
+            if ($selectedFile === null) {
+                foreach (['storage/logs/laravel.log', 'shared/storage/logs/laravel.log', 'error_log'] as $pref) {
+                    foreach ($availableLogs as $al) {
+                        if ($al['path'] === $pref) {
+                            $selectedFile = $pref;
+                            break 2;
+                        }
+                    }
+                }
+                if ($selectedFile === null && !empty($availableLogs)) {
+                    $selectedFile = $availableLogs[0]['path'];
+                }
+            }
+
+            $content = '';
+            $fileSize = '0B';
+            $fileLines = 0;
+            $exists = false;
+
+            if ($selectedFile !== null) {
+                $quoted = $this->posixQuote($selectedFile);
+                $fetchScript = <<<BASH
+cd {$cdTarget} 2>/dev/null || exit 1
+if [ -f {$quoted} ]; then
+    echo "EXISTS"
+    wc -l {$quoted} 2>/dev/null | awk '{print \$1}'
+    ls -lh {$quoted} 2>/dev/null | awk '{print \$5}'
+    echo "===CONTENT==="
+    tail -n {$lines} {$quoted} 2>/dev/null
+fi
+BASH;
+                $fetchOut = (string) $ssh->exec($this->cleanScript($fetchScript));
+                if (str_starts_with(trim($fetchOut), 'EXISTS')) {
+                    $exists = true;
+                    $parts = explode("===CONTENT===\n", $fetchOut, 2);
+                    if (isset($parts[0])) {
+                        $metaLines = explode("\n", trim($parts[0]));
+                        $fileLines = isset($metaLines[1]) ? (int) $metaLines[1] : 0;
+                        $fileSize = isset($metaLines[2]) ? trim($metaLines[2]) : '0B';
+                    }
+                    $content = $parts[1] ?? '';
+                }
+            }
+
+            return [
+                'ok'             => true,
+                'available_logs' => array_values($availableLogs),
+                'selected_file'  => $selectedFile ?? '',
+                'content'        => $content,
+                'exists'         => $exists,
+                'file_size'      => $fileSize,
+                'line_count'     => $fileLines,
+                'tail_lines'     => $lines,
+            ];
+        } finally {
+            if ($ssh->isConnected()) {
+                $ssh->disconnect();
+            }
+        }
+    }
+
+    /**
+     * Truncates / clears a remote log file to empty (size 0).
+     *
+     * @return array<string, mixed>
+     */
+    public function clearRemoteLog(int $projectId, string $file): array
+    {
+        $cleanFile = $this->sanitizeLogPath($file);
+        if ($cleanFile === null) {
+            throw new \InvalidArgumentException('Invalid remote log file path.');
+        }
+
+        $bundle = $this->projects->getWithDecryptedCredentials($projectId);
+        $project = $bundle['project'];
+        $remotePath = trim((string) $project['remote_path']);
+        if ($remotePath === '') {
+            $remotePath = '~';
+        }
+
+        $conn = $this->connect(
+            host: (string) $project['ssh_host'],
+            port: (int) $project['ssh_port'],
+            username: (string) $project['ssh_username'],
+            authType: (string) $project['ssh_auth_type'],
+            password: $bundle['password'],
+            privateKey: $bundle['private_key'],
+            passphrase: $bundle['passphrase'],
+            timeout: max(5, min(20, (int) ($project['ssh_timeout'] ?? 10)))
+        );
+
+        /** @var \phpseclib3\Net\SSH2 $ssh */
+        $ssh = $conn['ssh'];
+
+        try {
+            $cdTarget = $this->buildCdTarget($remotePath);
+            $quoted = $this->posixQuote($cleanFile);
+
+            $script = <<<BASH
+cd {$cdTarget} 2>/dev/null || exit 1
+if [ -f {$quoted} ]; then
+    : > {$quoted} || truncate -s 0 {$quoted} 2>/dev/null || exit 2
+    echo "CLEARED"
+else
+    echo "NOT_FOUND"
+    exit 3
+fi
+BASH;
+            $out = trim($this->cleanScript((string) $ssh->exec($script)));
+            if (!str_contains($out, 'CLEARED')) {
+                throw new \RuntimeException("Failed to clear remote log '{$cleanFile}': " . $out);
+            }
+
+            $this->logger->log([
+                'project_id'   => $projectId,
+                'project_name' => (string) $project['name'],
+                'category'     => 'audit',
+                'event_type'   => 'log_cleared',
+                'status'       => 'info',
+                'title'        => "Cleared remote error log: {$cleanFile}",
+                'ssh_target'   => $project['ssh_username'] . '@' . $project['ssh_host'],
+                'output_log'   => "Truncated remote log file '{$cleanFile}' to 0 bytes.",
+            ]);
+
+            return [
+                'ok'           => true,
+                'message'      => "Remote log '{$cleanFile}' has been cleared successfully.",
+                'cleared_file' => $cleanFile,
+            ];
+        } finally {
+            if ($ssh->isConnected()) {
+                $ssh->disconnect();
+            }
+        }
+    }
+
+    /**
+     * Streams the full remote log file to the output buffer for direct download.
+     */
+    public function streamRemoteLogDownload(int $projectId, string $file): void
+    {
+        $cleanFile = $this->sanitizeLogPath($file);
+        if ($cleanFile === null) {
+            http_response_code(400);
+            header('Content-Type: text/plain; charset=utf-8');
+            echo "Invalid remote log file path.\n";
+            exit;
+        }
+
+        $bundle = $this->projects->getWithDecryptedCredentials($projectId);
+        $project = $bundle['project'];
+        $remotePath = trim((string) $project['remote_path']);
+        if ($remotePath === '') {
+            $remotePath = '~';
+        }
+
+        $conn = $this->connect(
+            host: (string) $project['ssh_host'],
+            port: (int) $project['ssh_port'],
+            username: (string) $project['ssh_username'],
+            authType: (string) $project['ssh_auth_type'],
+            password: $bundle['password'],
+            privateKey: $bundle['private_key'],
+            passphrase: $bundle['passphrase'],
+            timeout: max(5, min(20, (int) ($project['ssh_timeout'] ?? 10)))
+        );
+
+        /** @var \phpseclib3\Net\SSH2 $ssh */
+        $ssh = $conn['ssh'];
+
+        try {
+            $cdTarget = $this->buildCdTarget($remotePath);
+            $quoted = $this->posixQuote($cleanFile);
+            $downloadFilename = preg_replace('/[^a-zA-Z0-9._-]/', '_', basename($cleanFile));
+            $projectSlug = preg_replace('/[^a-zA-Z0-9_-]/', '-', strtolower((string) $project['name'])) ?: 'project';
+            $finalFilename = "{$projectSlug}-{$downloadFilename}";
+
+            header('Content-Type: text/plain; charset=utf-8');
+            header('Content-Disposition: attachment; filename="' . $finalFilename . '"');
+            header('Cache-Control: no-cache, no-store, must-revalidate');
+
+            $ssh->exec("cd {$cdTarget} 2>/dev/null && [ -f {$quoted} ] && cat {$quoted}", static function (string $chunk): void {
+                echo $chunk;
+                if (ob_get_level() > 0) {
+                    ob_flush();
+                }
+                flush();
+            });
+            exit;
+        } finally {
+            if ($ssh->isConnected()) {
+                $ssh->disconnect();
+            }
+        }
+    }
+
+    /**
+     * Sanitizes and validates a requested log file path to prevent directory traversal and injection.
+     */
+    private function sanitizeLogPath(string $rawPath): ?string
+    {
+        $clean = trim(str_replace('\\', '/', $rawPath));
+        if ($clean === '' || str_starts_with($clean, '/') || str_starts_with($clean, '~')) {
+            return null;
+        }
+        if (preg_match('#\.\./\.\.#', $clean)) {
+            return null;
+        }
+        if (preg_match('/[;&|`$<>"\']/', $clean)) {
+            return null;
+        }
+        if (!preg_match('/(\.log|error_log|\.txt)$/i', $clean)) {
+            return null;
+        }
+        return $clean;
+    }
+
+    /**
      * Checks HTTP health check URL and measures response time.
      *
      * @return array<string, mixed>

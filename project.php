@@ -59,6 +59,10 @@ require __DIR__ . '/src/Views/header.php';
                         <span>📝</span>
                         <span>.env</span>
                     </button>
+                                        <button type="button" class="btn btn-secondary" id="remoteLogsHeroBtn" title="Inspect, download &amp; clear remote application error logs (e.g. laravel.log)">
+                        <span>📜</span>
+                        <span>Remote Logs</span>
+                    </button>
                     <button type="button" class="btn btn-secondary" id="releasesHeroBtn" title="View historical releases &amp; 1-click rollback">
                         <span>⏪</span>
                         <span>Releases</span>
@@ -136,6 +140,7 @@ require __DIR__ . '/src/Views/header.php';
                         <input type="search" class="search-input event-search-input" id="eventSearchInput" placeholder="Search logs, commands, output...">
                         <div class="event-filter-btns">
                             <button type="button" class="btn btn-ghost btn-sm" id="refreshEventsBtn">Refresh</button>
+                            <a href="api.php?action=download_project_events&project_id=<?= (int) ($project['id'] ?? 0) ?>&status=all" class="btn btn-ghost btn-sm" id="downloadEventsBtn" title="Download deployer event &amp; error history as .log">📥 Download Logs</a>
                             <button type="button" class="btn btn-danger btn-sm" id="clearEventsBtn">Clear Logs</button>
                         </div>
                     </div>
@@ -182,6 +187,7 @@ require __DIR__ . '/src/Views/header.php';
 <?php require __DIR__ . '/src/Views/server_pulse_modal.php'; ?>
 <?php require __DIR__ . '/src/Views/env_modal.php'; ?>
 <?php require __DIR__ . '/src/Views/rollback_modal.php'; ?>
+<?php require __DIR__ . '/src/Views/remote_logs_modal.php'; ?>
 
 <script>
     window.INITIAL_PROJECT_PAGE = <?= json_encode([

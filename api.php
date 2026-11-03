@@ -182,6 +182,70 @@ try {
                 header(sprintf('Content-Disposition: attachment; filename="sshhh-event-%d.log"', $event['id']));
                 echo implode("\n", $lines);
                 exit;
+            case 'download_project_events':
+                $projectId = (int) ($_GET['project_id'] ?? 0);
+                $status = trim((string) ($_GET['status'] ?? 'all'));
+                $project = $app->projects()->find($projectId);
+                if (!$project) {
+                    http_response_code(404);
+                    header('Content-Type: text/plain; charset=utf-8');
+                    echo "Project not found.\n";
+                    exit;
+                }
+
+                $events = $app->logger()->getProjectLogsExport($projectId, $status);
+                $date = date('Ymd_His');
+                $slug = preg_replace('/[^a-zA-Z0-9_-]/', '-', strtolower((string) $project['name'])) ?: 'project';
+                $suffix = ($status === 'failed') ? 'error-logs' : 'event-logs';
+                $filename = "{$slug}-{$suffix}-{$date}.log";
+
+                header('Content-Type: text/plain; charset=utf-8');
+                header('Content-Disposition: attachment; filename="' . $filename . '"');
+                header('Cache-Control: no-cache, no-store, must-revalidate');
+
+                echo "====================================================================\n";
+                echo "SSHhh DEPLOYER " . strtoupper($suffix) . "\n";
+                echo "Project  : {$project['name']} (#{$project['id']})\n";
+                echo "Target   : {$project['ssh_username']}@{$project['ssh_host']}:{$project['ssh_port']}\n";
+                echo "Exported : " . date('Y-m-d H:i:s T') . "\n";
+                echo "Filter   : " . strtoupper($status) . " (" . count($events) . " entries)\n";
+                echo "====================================================================\n\n";
+
+                if (empty($events)) {
+                    echo "No matching event logs recorded for this project.\n";
+                    exit;
+                }
+
+                foreach ($events as $ev) {
+                    echo "--------------------------------------------------------------------\n";
+                    echo "[#{$ev['id']}] {$ev['created_at']} | " . strtoupper((string) $ev['status']) . " | " . strtoupper((string) $ev['category']) . "\n";
+                    echo "Title    : {$ev['title']}\n";
+                    if (!empty($ev['command_text'])) {
+                        echo "Command  : {$ev['command_text']}\n";
+                    }
+                    if ($ev['exit_code'] !== null) {
+                        echo "Exit Code: {$ev['exit_code']}\n";
+                    }
+                    if ($ev['duration_ms'] !== null) {
+                        echo "Duration : {$ev['duration_ms']} ms\n";
+                    }
+                    echo "Output   :\n";
+                    echo !empty($ev['output_log']) ? rtrim($ev['output_log']) . "\n" : "  (No console output)\n";
+                    echo "\n";
+                }
+                exit;
+
+            case 'download_remote_log':
+                $projectId = (int) ($_GET['project_id'] ?? 0);
+                $file = trim((string) ($_GET['file'] ?? ''));
+                if ($projectId <= 0 || $file === '') {
+                    http_response_code(400);
+                    header('Content-Type: text/plain; charset=utf-8');
+                    echo "Project ID and file are required.\n";
+                    exit;
+                }
+                $app->runner()->streamRemoteLogDownload($projectId, $file);
+                exit;
 
             case 'list_remote_dirs':
                 $projectId = (int) ($_GET['project_id'] ?? 0);
@@ -423,15 +487,36 @@ try {
 
         case 'clear_events':
             $projectId = (int) ($body['project_id'] ?? 0);
+            $status = trim((string) ($body['status'] ?? 'all'));
             $project = $app->projects()->find($projectId);
             if (!$project) {
                 throw new InvalidArgumentException('Project not found.');
             }
-            $deleted = $app->logger()->clearForProject($projectId, (string) $project['name']);
+            $deleted = $app->logger()->clearForProject($projectId, (string) $project['name'], $status);
             respondJson([
                 'ok'      => true,
                 'deleted' => $deleted,
+                'status'  => $status,
             ]);
+
+        case 'get_remote_logs':
+            $projectId = (int) ($body['project_id'] ?? 0);
+            if ($projectId <= 0) {
+                respondJson(['ok' => false, 'error' => 'Project ID is required.'], 422);
+            }
+            $file = isset($body['file']) && is_string($body['file']) ? trim($body['file']) : null;
+            $lines = isset($body['lines']) ? (int) $body['lines'] : 300;
+            $logData = $app->runner()->getRemoteLogs($projectId, $file, $lines);
+            respondJson(['ok' => true, 'result' => $logData]);
+
+        case 'clear_remote_log':
+            $projectId = (int) ($body['project_id'] ?? 0);
+            $file = trim((string) ($body['file'] ?? ''));
+            if ($projectId <= 0 || $file === '') {
+                respondJson(['ok' => false, 'error' => 'Project ID and file are required.'], 422);
+            }
+            $res = $app->runner()->clearRemoteLog($projectId, $file);
+            respondJson(['ok' => true, 'result' => $res]);
 
         case 'server_pulse':
             $projectId = (int) ($body['project_id'] ?? 0);

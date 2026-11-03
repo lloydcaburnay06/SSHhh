@@ -569,6 +569,14 @@
             });
         }
 
+        const remoteLogsHeroBtn = document.getElementById('remoteLogsHeroBtn');
+        if (remoteLogsHeroBtn) {
+            remoteLogsHeroBtn.addEventListener('click', () => {
+                if (isExecuting) return;
+                if (App.openRemoteLogsModal) App.openRemoteLogsModal(project);
+            });
+        }
+
         const releasesHeroBtn = document.getElementById('releasesHeroBtn');
         if (releasesHeroBtn) {
             releasesHeroBtn.addEventListener('click', () => {
@@ -883,12 +891,15 @@
         document.getElementById('refreshEventsBtn').addEventListener('click', loadEvents);
 
         document.getElementById('clearEventsBtn').addEventListener('click', async () => {
+            const isFailedOnly = (eventStatus === 'failed');
             const confirmed = await App.confirmAction({
-                title: 'Clear Historical Event Logs?',
+                title: isFailedOnly ? 'Clear Failed Event Logs Only?' : 'Clear Historical Event Logs?',
                 subtitle: project.name,
-                message: `Are you sure you want to clear all historical deployment and audit event logs for <strong>${App.escapeHtml(project.name)}</strong>?`,
+                message: isFailedOnly
+                    ? `Are you sure you want to clear all <strong>failed / error</strong> event logs for <strong>${App.escapeHtml(project.name)}</strong>? Succeeded events and deployment history will be kept.`
+                    : `Are you sure you want to clear <strong>all</strong> historical deployment and audit event logs for <strong>${App.escapeHtml(project.name)}</strong>?`,
                 warning: 'Past logs and console output records cannot be recovered.',
-                confirmText: 'Clear Logs',
+                confirmText: isFailedOnly ? 'Clear Error Logs' : 'Clear All Logs',
                 confirmClass: 'btn-danger',
                 icon: '🗑',
                 iconVariant: 'danger',
@@ -896,7 +907,10 @@
             if (!confirmed) return;
 
             try {
-                const res = await App.apiPost('clear_events', { project_id: project.id });
+                const res = await App.apiPost('clear_events', {
+                    project_id: project.id,
+                    status: isFailedOnly ? 'failed' : 'all'
+                });
                 App.toast(`Cleared ${res.deleted} event log entries.`, 'info');
                 await loadEvents();
             } catch (err) {

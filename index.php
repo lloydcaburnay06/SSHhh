@@ -91,6 +91,7 @@ require __DIR__ . '/src/Views/header.php';
 <?php require __DIR__ . '/src/Views/server_pulse_modal.php'; ?>
 <?php require __DIR__ . '/src/Views/env_modal.php'; ?>
 <?php require __DIR__ . '/src/Views/rollback_modal.php'; ?>
+<?php require __DIR__ . '/src/Views/remote_logs_modal.php'; ?>
 
 <script>
     window.INITIAL_DASHBOARD_DATA = <?= json_encode([
