@@ -688,6 +688,14 @@
                 App.openRemoteEnvModal(project);
             } else if (action === 'releases') {
                 App.openReleasesModal(project, refreshAll);
+            } else if (action === 'remote-logs') {
+                if (App.openRemoteLogsModal) {
+                    App.openRemoteLogsModal(project);
+                } else if (window.DeployerApp && window.DeployerApp.openRemoteLogsModal) {
+                    window.DeployerApp.openRemoteLogsModal(project);
+                } else {
+                    App.toast('Remote logs viewer is not available.', 'error');
+                }
             } else if (action === 'duplicate') {
                 App.openDuplicateModal(project, async (savedProject, wasSaved) => {
                     if (wasSaved && savedProject) {

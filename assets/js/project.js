@@ -573,7 +573,13 @@
         if (remoteLogsHeroBtn) {
             remoteLogsHeroBtn.addEventListener('click', () => {
                 if (isExecuting) return;
-                if (App.openRemoteLogsModal) App.openRemoteLogsModal(project);
+                if (App.openRemoteLogsModal) {
+                    App.openRemoteLogsModal(project);
+                } else if (window.DeployerApp && window.DeployerApp.openRemoteLogsModal) {
+                    window.DeployerApp.openRemoteLogsModal(project);
+                } else {
+                    App.toast('Remote logs viewer is not available.', 'error');
+                }
             });
         }
 
