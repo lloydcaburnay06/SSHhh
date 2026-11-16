@@ -21,11 +21,6 @@ $baseConfig = [
         // Can also be overridden via DEPLOYER_SECRET_KEY environment variable.
         'key_file' => dirname(__DIR__) . '/storage/secret.key',
     ],
-    'auth' => [
-        'app_password'      => Env::get('DEPLOYER_APP_PASSWORD', '') ?? '',
-        'app_password_hash' => Env::get('DEPLOYER_APP_PASSWORD_HASH', '') ?? '',
-        'allow_remote'      => Env::bool('DEPLOYER_ALLOW_REMOTE', false),
-    ],
 ];
 
 $localOverride = __DIR__ . '/config.local.php';

@@ -37,6 +37,22 @@ final class AccessGuard
         $scriptName = basename((string) ($_SERVER['SCRIPT_NAME'] ?? ''));
         $isApi = ($scriptName === 'api.php');
 
+        // Git push webhooks carry no session/cookie; they authenticate with the
+        // per-project webhook token checked in api.php instead.
+        if ($isApi && (string) ($_GET['action'] ?? $_POST['action'] ?? '') === 'webhook') {
+            $lockedFor = self::lockoutMinutesRemaining($pdo);
+            if ($lockedFor > 0) {
+                http_response_code(429);
+                header('Content-Type: application/json; charset=utf-8');
+                echo json_encode([
+                    'ok'    => false,
+                    'error' => "Too many failed attempts. Try again in {$lockedFor} minute(s).",
+                ]);
+                exit;
+            }
+            return;
+        }
+
         // 1. Handle Logout
         if (isset($_GET['logout']) && $_GET['logout'] === '1') {
             self::handleLogout($pdo);
@@ -66,6 +82,13 @@ final class AccessGuard
                 exit;
             }
 
+            if (!self::isLocalRequest()) {
+                http_response_code(403);
+                header('Content-Type: text/plain; charset=utf-8');
+                echo "SSHhh has not been set up yet. Open it on the computer running it (http://localhost/...) to configure Google Authenticator.\n";
+                exit;
+            }
+
             self::handleInitialSetup($pdo, $crypto, $csrfToken);
             return;
         }
@@ -88,6 +111,83 @@ final class AccessGuard
         }
 
         self::handleLogin($pdo, $crypto, $csrfToken, (string) ($authState['totp_secret_encrypted'] ?? ''));
+    }
+
+    private const MAX_FAILED_ATTEMPTS = 5;
+    private const LOCKOUT_MINUTES = 15;
+
+    /**
+     * Returns the number of minutes remaining in the lockout for this IP (0 = not locked).
+     */
+    private static function lockoutMinutesRemaining(PDO $pdo): int
+    {
+        try {
+            self::ensureAttemptsTable($pdo);
+            $stmt = $pdo->prepare(<<<'SQL'
+                SELECT COUNT(*) AS `fails`, MIN(`attempted_at`) AS `first_fail`
+                FROM `login_attempts`
+                WHERE `ip_address` = :ip AND `attempted_at` > DATE_SUB(NOW(), INTERVAL :mins MINUTE)
+            SQL);
+            $stmt->execute([':ip' => self::clientIp(), ':mins' => self::LOCKOUT_MINUTES]);
+            $row = $stmt->fetch() ?: [];
+            if ((int) ($row['fails'] ?? 0) < self::MAX_FAILED_ATTEMPTS) {
+                return 0;
+            }
+            $elapsed = time() - (int) strtotime((string) $row['first_fail']);
+            return max(1, (int) ceil((self::LOCKOUT_MINUTES * 60 - $elapsed) / 60));
+        } catch (Throwable) {
+            return 0;
+        }
+    }
+
+    public static function recordFailedAttempt(PDO $pdo): void
+    {
+        try {
+            self::ensureAttemptsTable($pdo);
+            $pdo->prepare('INSERT INTO `login_attempts` (`ip_address`, `attempted_at`) VALUES (:ip, NOW())')
+                ->execute([':ip' => self::clientIp()]);
+            $pdo->exec('DELETE FROM `login_attempts` WHERE `attempted_at` < DATE_SUB(NOW(), INTERVAL 1 DAY)');
+        } catch (Throwable) {
+        }
+    }
+
+    private static function clearFailedAttempts(PDO $pdo): void
+    {
+        try {
+            $pdo->prepare('DELETE FROM `login_attempts` WHERE `ip_address` = :ip')->execute([':ip' => self::clientIp()]);
+        } catch (Throwable) {
+        }
+    }
+
+    private static function ensureAttemptsTable(PDO $pdo): void
+    {
+        static $done = false;
+        if ($done) {
+            return;
+        }
+        $pdo->exec(<<<'SQL'
+            CREATE TABLE IF NOT EXISTS `login_attempts` (
+                `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+                `ip_address` VARCHAR(60) NOT NULL,
+                `attempted_at` DATETIME NOT NULL,
+                PRIMARY KEY (`id`),
+                KEY `idx_ip_time` (`ip_address`, `attempted_at`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        SQL);
+        $done = true;
+    }
+
+    private static function isLocalRequest(): bool
+    {
+        $ip = (string) ($_SERVER['REMOTE_ADDR'] ?? '');
+        // Behind a proxy/tunnel the request arrives from 127.0.0.1 but carries forwarding headers.
+        $forwarded = !empty($_SERVER['HTTP_X_FORWARDED_FOR']) || !empty($_SERVER['HTTP_CF_CONNECTING_IP']) || !empty($_SERVER['HTTP_FORWARDED']);
+        return !$forwarded && in_array($ip, ['127.0.0.1', '::1'], true);
+    }
+
+    private static function clientIp(): string
+    {
+        return substr((string) ($_SERVER['REMOTE_ADDR'] ?? 'unknown'), 0, 60);
     }
 
     private static function handleLogout(PDO $pdo): void
@@ -203,7 +303,10 @@ final class AccessGuard
             $submittedCode = preg_replace('/\s+/', '', (string) $_POST['setup_code']);
             $rememberDevice = !empty($_POST['remember_device']);
 
-            if ($csrfToken === '' || !hash_equals($csrfToken, $submittedCsrf)) {
+            $lockedFor = self::lockoutMinutesRemaining($pdo);
+            if ($lockedFor > 0) {
+                $error = "Too many incorrect codes. Try again in {$lockedFor} minute(s).";
+            } elseif ($csrfToken === '' || !hash_equals($csrfToken, $submittedCsrf)) {
                 $error = 'Invalid security token. Please refresh and try again.';
             } elseif (!preg_match('/^[0-9]{6}$/', $submittedCode)) {
                 $error = 'Please enter a valid 6-digit verification code.';
@@ -233,6 +336,7 @@ final class AccessGuard
                 header('Location: index.php');
                 exit;
             } else {
+                self::recordFailedAttempt($pdo);
                 usleep(300_000);
                 $error = 'Incorrect verification code. Ensure your device clock is accurate and try again.';
             }
@@ -261,7 +365,10 @@ final class AccessGuard
             $submittedCode = preg_replace('/\s+/', '', (string) $_POST['login_code']);
             $rememberDevice = !empty($_POST['remember_device']);
 
-            if ($csrfToken === '' || !hash_equals($csrfToken, $submittedCsrf)) {
+            $lockedFor = self::lockoutMinutesRemaining($pdo);
+            if ($lockedFor > 0) {
+                $error = "Too many incorrect codes. Try again in {$lockedFor} minute(s).";
+            } elseif ($csrfToken === '' || !hash_equals($csrfToken, $submittedCsrf)) {
                 $error = 'Invalid security token. Please try again.';
             } elseif (!preg_match('/^[0-9]{6}$/', $submittedCode)) {
                 $error = 'Please enter a valid 6-digit code.';
@@ -274,6 +381,7 @@ final class AccessGuard
                 }
 
                 if ($totpSecret !== '' && Totp::verifyCode($totpSecret, $submittedCode, 1)) {
+                    self::clearFailedAttempts($pdo);
                     session_regenerate_id(true);
                     $_SESSION['deployer_authenticated'] = true;
                     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
@@ -296,6 +404,7 @@ final class AccessGuard
                     header('Location: ' . $redirect);
                     exit;
                 } else {
+                    self::recordFailedAttempt($pdo);
                     usleep(350_000);
                     $error = 'Invalid verification code. Please check your Google Authenticator app.';
                 }

@@ -197,7 +197,7 @@ require __DIR__ . '/src/Views/header.php';
         'events'       => $eventsData,
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
 </script>
-<script src="assets/js/common.js?v=1.7.0"></script>
-<script src="assets/js/project.js?v=1.5.0"></script>
+<script src="assets/js/common.js?v=<?= (int) @filemtime(__DIR__ . '/assets/js/common.js') ?>"></script>
+<script src="assets/js/project.js?v=<?= (int) @filemtime(__DIR__ . '/assets/js/project.js') ?>"></script>
 </body>
 </html>

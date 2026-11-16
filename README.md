@@ -32,12 +32,16 @@
 - **Single-User Google Authenticator 2FA (TOTP)**:
   - First-time interactive setup screen featuring an **offline SVG QR code** and manual secret key.
   - **Permanent One-Time Lockout**: Once verified, the setup screen and secret key are encrypted at rest and permanently locked out.
+  - **Brute-force lockout**: 5 wrong codes from one IP locks login for 15 minutes.
+  - **Localhost-only setup**: the first-time setup screen can only be completed from the machine running SSHhh.
   - **Remember This Device**: Persistent 30-day SHA-256 hashed device cookie so you don't have to enter the 6-digit code every time you launch the app on your phone.
 - **AES-256-GCM Encrypted SSH Vault**:
   - Supports **SSH Password** and **SSH Private Key** (+ optional passphrase) authentication via pure-PHP `phpseclib/phpseclib` (no `ext-ssh2` C extension required).
   - Encrypts credentials at rest using **AES-256-GCM** + **HKDF-SHA256**, unique 96-bit IVs, and 128-bit authentication tags.
   - Zero browser exposure: stored secrets are never sent back in HTML, JSON responses, or logs.
-  - 1-click **Test SSH Connection** verifies authentication, records the server's OpenSSH `SHA256` host key fingerprint, and checks the remote working directory.
+  - 1-click **Test SSH Connection** verifies authentication, pins the server's OpenSSH `SHA256` host key fingerprint, and checks the remote working directory.
+  - **Host key pinning**: deployments refuse to connect (and never send credentials) if a server's host key changes. Re-run **Test SSH Connection** to trust a legitimately changed key.
+  - **One deployment per project at a time**, with automatic recovery of deployments interrupted by a crash or restart.
 - **Card-Based Pipeline Editor & Live Streaming Terminal**:
   - Full-width two-panel layout with independently scrollable panels on desktop and mobile.
   - Drag-and-drop command card reordering, multi-line command editing, and presets (`Git Pull`, `Composer`, `Laravel`, `Node/PM2`).
@@ -100,9 +104,6 @@ cp .env.example .env
 | `DEPLOYER_DB_NAME` | `ssh_deployer` | Database name (auto-created if permitted) |
 | `DEPLOYER_DB_USER` | `root` | Database username |
 | `DEPLOYER_DB_PASS` | *(empty)* | Database password |
-| `DEPLOYER_APP_PASSWORD` | *(empty)* | Plaintext app login password (enables login screen & remote/mobile access) |
-| `DEPLOYER_APP_PASSWORD_HASH` | *(empty)* | Recommended bcrypt/argon2 hash (`php -r "echo password_hash('secret', PASSWORD_DEFAULT);"`) |
-| `DEPLOYER_ALLOW_REMOTE` | `false` | Allow remote IPs without a login password (**keep `false` outside trusted networks**) |
 | `DEPLOYER_SECRET_KEY` | *(auto)* | Optional 32+ char master key override (otherwise stored in `storage/secret.key`) |
 
 ---
@@ -113,6 +114,12 @@ Every remote SSH command runs inside your project's configured **Remote Working 
 
 - `$DEPLOY_BRANCH` — The project's configured default Git branch (e.g. `main`)
 - `$DEPLOY_ENV` — The project's environment (`production`, `staging`, `development`, `testing`)
+
+---
+
+## Git Push Webhooks on a Local Install
+
+GitHub/Bitbucket cannot reach `localhost`. To use push-to-deploy webhooks, expose only the webhook URL through a tunnel (e.g. Cloudflare Tunnel or ngrok) pointing at `http://localhost/deployer/`, and use the URL shown in the project's webhook settings with the tunnel hostname. The webhook is authenticated by its per-project token; everything else still requires Google Authenticator.
 
 ---
 

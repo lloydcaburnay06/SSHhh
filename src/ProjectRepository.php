@@ -22,6 +22,8 @@ final class ProjectRepository
      */
     public function listAll(): array
     {
+        $this->recoverStaleRuns();
+
         $sql = <<<'SQL'
             SELECT
                 p.*,
@@ -883,6 +885,63 @@ final class ProjectRepository
         ]);
     }
 
+    /**
+     * Per-project deploy lock (MySQL GET_LOCK). The lock belongs to this PHP
+     * request's DB connection, so MySQL frees it automatically if PHP dies.
+     */
+    public function acquireDeployLock(int $projectId): bool
+    {
+        $stmt = $this->pdo->prepare('SELECT GET_LOCK(:name, 0)');
+        $stmt->execute([':name' => $this->deployLockName($projectId)]);
+        return (int) $stmt->fetchColumn() === 1;
+    }
+
+    public function releaseDeployLock(int $projectId): void
+    {
+        try {
+            $stmt = $this->pdo->prepare('SELECT RELEASE_LOCK(:name)');
+            $stmt->execute([':name' => $this->deployLockName($projectId)]);
+        } catch (\Throwable) {
+            // Lock is released anyway when the connection closes
+        }
+    }
+
+    private function deployLockName(int $projectId): string
+    {
+        $db = (string) $this->pdo->query('SELECT DATABASE()')->fetchColumn();
+        return substr('sshhh_deploy_' . $db . '_' . $projectId, 0, 64);
+    }
+
+    /**
+     * Marks deployments stuck in "running" as failed when no process holds their
+     * lock anymore (PHP crashed, Apache restarted, PC went to sleep, ...).
+     */
+    public function recoverStaleRuns(): void
+    {
+        try {
+            $ids = $this->pdo->query("SELECT `id` FROM `projects` WHERE `last_deploy_status` = 'running'")->fetchAll(PDO::FETCH_COLUMN);
+            foreach ($ids as $id) {
+                $id = (int) $id;
+                $stmt = $this->pdo->prepare('SELECT IS_FREE_LOCK(:name)');
+                $stmt->execute([':name' => $this->deployLockName($id)]);
+                if ((int) $stmt->fetchColumn() !== 1) {
+                    continue; // still genuinely running
+                }
+                $this->pdo->prepare("UPDATE `projects` SET `last_deploy_status` = 'failed' WHERE `id` = :id AND `last_deploy_status` = 'running'")
+                    ->execute([':id' => $id]);
+                $this->pdo->prepare(<<<'SQL'
+                    UPDATE `event_logs`
+                    SET `status` = 'failed',
+                        `title` = CONCAT(`title`, ' — interrupted (process stopped before finishing)'),
+                        `completed_at` = NOW()
+                    WHERE `project_id` = :id AND `status` = 'running' AND `category` = 'deployment'
+                SQL)->execute([':id' => $id]);
+            }
+        } catch (\Throwable) {
+            // Never block the dashboard over recovery
+        }
+    }
+
     public function updateProjectDeployStatus(int $projectId, string $status, ?int $durationMs = null): void
     {
         $stmt = $this->pdo->prepare(<<<'SQL'
@@ -952,7 +1011,11 @@ final class ProjectRepository
         $stmt = $this->pdo->prepare('SELECT * FROM `projects` WHERE `webhook_token` = :token LIMIT 1');
         $stmt->execute([':token' => $token]);
         $row = $stmt->fetch();
-        return $row ? $this->sanitizeProjectRow($row) : null;
+        if (!$row || !hash_equals((string) ($row['webhook_token'] ?? ''), $token)) {
+            AccessGuard::recordFailedAttempt($this->pdo);
+            return null;
+        }
+        return $this->sanitizeProjectRow($row);
     }
 
     public function updateHealthStatus(int $projectId, string $status, ?int $responseCode = null): void

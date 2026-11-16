@@ -102,6 +102,8 @@ final class SshRunner
 
             $durationMs = (int) round((hrtime(true) - $startedAt) / 1_000_000);
             $pathMissing = str_contains($probeOutput, 'PATH_CHECK=MISSING');
+            $previousFingerprint = (string) ($savedProject['host_fingerprint'] ?? '');
+            $keyChanged = $previousFingerprint !== '' && $fingerprint !== '' && $previousFingerprint !== $fingerprint;
 
             if ($projectId !== null && $savedProject !== null) {
                 $this->projects->updateHostFingerprint($projectId, $fingerprint);
@@ -137,9 +139,11 @@ final class SshRunner
                 'fingerprint'  => $fingerprint,
                 'banner'       => $banner,
                 'probe_output' => $probeOutput,
-                'message'      => $pathMissing
+                'key_changed'  => $keyChanged,
+                'message'      => ($pathMissing
                     ? "SSH authenticated in {$durationMs}ms, warning: remote directory '{$remotePath}' was not found."
-                    : "SSH connection verified in {$durationMs}ms.",
+                    : "SSH connection verified in {$durationMs}ms.")
+                    . ($keyChanged ? " Note: the server host key changed and the new key is now trusted ({$fingerprint})." : ''),
             ];
         } catch (Throwable $e) {
             $durationMs = (int) round((hrtime(true) - $startedAt) / 1_000_000);
@@ -186,7 +190,8 @@ final class SshRunner
             password: (string) $bundle['password'],
             privateKey: (string) $bundle['private_key'],
             passphrase: (string) $bundle['passphrase'],
-            timeout: max(3, min(20, (int) ($project['ssh_timeout'] ?? 10)))
+            timeout: max(3, min(20, (int) ($project['ssh_timeout'] ?? 10))),
+            expectedFingerprint: (string) ($project['host_fingerprint'] ?? '')
         );
 
         /** @var SSH2 $ssh */
@@ -326,6 +331,46 @@ final class SshRunner
             $commandSummary = implode("\n", array_map(static fn(array $s): string => $s['command'], $stepsToRun));
         }
 
+        $holdsLock = false;
+        if ($mode === 'deploy_all') {
+            if (!$this->projects->acquireDeployLock($projectId)) {
+                throw new RuntimeException("A deployment for '{$projectName}' is already running. Wait for it to finish before starting another one.");
+            }
+            $holdsLock = true;
+        }
+
+        try {
+            return $this->runSteps($projectId, $mode, $project, $bundle, $projectName, $remotePath, $branch, $env, $target, $stepsToRun, $category, $eventType, $initialTitle, $commandSummary, $send);
+        } finally {
+            if ($holdsLock) {
+                $this->projects->releaseDeployLock($projectId);
+            }
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $project
+     * @param array<string, mixed> $bundle
+     * @param list<array<string, mixed>> $stepsToRun
+     * @return array<string, mixed>
+     */
+    private function runSteps(
+        int $projectId,
+        string $mode,
+        array $project,
+        array $bundle,
+        string $projectName,
+        string $remotePath,
+        string $branch,
+        string $env,
+        string $target,
+        array $stepsToRun,
+        string $category,
+        string $eventType,
+        string $initialTitle,
+        string $commandSummary,
+        callable $send
+    ): array {
         $eventId = $this->logger->log([
             'project_id'   => $projectId,
             'project_name' => $projectName,
@@ -376,7 +421,8 @@ final class SshRunner
                 password: $bundle['password'],
                 privateKey: $bundle['private_key'],
                 passphrase: $bundle['passphrase'],
-                timeout: (int) $project['ssh_timeout']
+                timeout: (int) $project['ssh_timeout'],
+                expectedFingerprint: (string) ($project['host_fingerprint'] ?? '')
             );
             $ssh = $conn['ssh'];
             $fingerprint = $conn['fingerprint'];
@@ -636,12 +682,26 @@ final class SshRunner
         string $password,
         string $privateKey,
         string $passphrase,
-        int $timeout
+        int $timeout,
+        string $expectedFingerprint = ''
     ): array {
         $ssh = new SSH2($host, $port, $timeout);
 
         $hostKeyRaw = $ssh->getServerPublicHostKey();
+        if ($hostKeyRaw === false) {
+            throw new RuntimeException("Could not reach SSH server {$host}:{$port} (connection refused, timed out, or blocked by firewall).");
+        }
         $fingerprint = $this->computeOpenSshFingerprint(is_string($hostKeyRaw) ? $hostKeyRaw : '');
+
+        // Host key pinning: refuse to send credentials to a server whose key changed.
+        if ($expectedFingerprint !== '' && $fingerprint !== '' && !hash_equals($expectedFingerprint, $fingerprint)) {
+            $ssh->disconnect();
+            throw new RuntimeException(
+                "HOST KEY MISMATCH for {$host}:{$port}. Expected {$expectedFingerprint} but server presented {$fingerprint}. "
+                . 'This can mean the server was reinstalled/migrated — or that someone is intercepting the connection. '
+                . 'Credentials were NOT sent. If the change is expected, run "Test SSH Connection" in the project settings to trust the new key.'
+            );
+        }
         $serverIdent = $ssh->getServerIdentification();
         $banner = is_string($serverIdent) ? trim($serverIdent) : '';
 
@@ -777,7 +837,8 @@ final class SshRunner
             password: $bundle['password'],
             privateKey: $bundle['private_key'],
             passphrase: $bundle['passphrase'],
-            timeout: max(5, min(20, (int) ($project['ssh_timeout'] ?? 10)))
+            timeout: max(5, min(20, (int) ($project['ssh_timeout'] ?? 10))),
+            expectedFingerprint: (string) ($project['host_fingerprint'] ?? '')
         );
 
         /** @var SSH2 $ssh */
@@ -848,7 +909,8 @@ BASH;
             password: $bundle['password'],
             privateKey: $bundle['private_key'],
             passphrase: $bundle['passphrase'],
-            timeout: max(5, min(20, (int) ($project['ssh_timeout'] ?? 10)))
+            timeout: max(5, min(20, (int) ($project['ssh_timeout'] ?? 10))),
+            expectedFingerprint: (string) ($project['host_fingerprint'] ?? '')
         );
 
         /** @var SSH2 $ssh */
@@ -917,7 +979,8 @@ BASH;
             password: $bundle['password'],
             privateKey: $bundle['private_key'],
             passphrase: $bundle['passphrase'],
-            timeout: max(5, min(20, (int) ($project['ssh_timeout'] ?? 10)))
+            timeout: max(5, min(20, (int) ($project['ssh_timeout'] ?? 10))),
+            expectedFingerprint: (string) ($project['host_fingerprint'] ?? '')
         );
 
         /** @var SSH2 $ssh */
@@ -995,7 +1058,8 @@ BASH;
             password: $bundle['password'],
             privateKey: $bundle['private_key'],
             passphrase: $bundle['passphrase'],
-            timeout: max(5, min(20, (int) ($project['ssh_timeout'] ?? 10)))
+            timeout: max(5, min(20, (int) ($project['ssh_timeout'] ?? 10))),
+            expectedFingerprint: (string) ($project['host_fingerprint'] ?? '')
         );
 
         /** @var \phpseclib3\Net\SSH2 $ssh */
@@ -1006,32 +1070,39 @@ BASH;
 
             $scanScript = <<<BASH
 cd {$cdTarget} 2>/dev/null || exit 1
-for d in "storage/logs" "shared/storage/logs" "logs"; do
-    if [ -d "\$d" ]; then
-        find "\$d" -maxdepth 2 -type f \( -name "*.log" -o -name "error_log" \) 2>/dev/null
+FILES=\$(
+    for d in "storage/logs" "shared/storage/logs" "logs"; do
+        if [ -d "\$d" ]; then
+            find "\$d" -maxdepth 2 -type f \( -name "*.log" -o -name "error_log" \) 2>/dev/null
+        fi
+    done
+    [ -f "error_log" ] && echo "error_log"
+    [ -f "../error_log" ] && echo "../error_log"
+    if [ -d "../logs" ]; then
+        find "../logs" -maxdepth 1 -type f \( -name "*.log" -o -name "error_log" \) 2>/dev/null
+    fi
+)
+printf '%s\n' "\$FILES" | awk 'NF && !seen[\$0]++' | while IFS= read -r rf; do
+    if [ -f "\$rf" ]; then
+        meta=\$(ls -lh "\$rf" 2>/dev/null | awk '{print \$5 " " \$6 " " \$7 " " \$8}')
+        printf '%s\t%s\n' "\$rf" "\$meta"
     fi
 done
-if [ -f "error_log" ]; then
-    echo "error_log"
-fi
-if [ -f "../error_log" ]; then
-    echo "../error_log"
-fi
-if [ -d "../logs" ]; then
-    find "../logs" -maxdepth 1 -type f \( -name "*.log" -o -name "error_log" \) 2>/dev/null
-fi
 BASH;
             $scanOut = trim((string) $ssh->exec($this->cleanScript($scanScript)));
-            $rawFiles = array_filter(array_map('trim', explode("\n", $scanOut)), static fn($f) => $f !== '');
-            $rawFiles = array_unique($rawFiles);
+            $scanLines = array_filter(array_map('trim', explode("\n", $scanOut)), static fn($l) => $l !== '');
 
             $availableLogs = [];
-            foreach ($rawFiles as $rf) {
-                $statCmd = "cd {$cdTarget} && [ -f '{$rf}' ] && ls -lh '{$rf}' 2>/dev/null | awk '{print \$5 \" \" \$6 \" \" \$7 \" \" \$8}'";
-                $statRes = trim((string) $ssh->exec($statCmd));
+            foreach ($scanLines as $line) {
+                [$rf, $statRes] = array_pad(explode("\t", $line, 2), 2, '');
+                $cleanRf = $this->sanitizeLogPath($rf);
+                if ($cleanRf === null) {
+                    continue;
+                }
+                $statRes = trim($statRes);
                 $availableLogs[] = [
-                    'path' => $rf,
-                    'name' => basename($rf),
+                    'path' => $cleanRf,
+                    'name' => basename($cleanRf),
                     'size' => strtok($statRes, ' ') ?: '0B',
                     'meta' => $statRes,
                 ];
@@ -1133,7 +1204,8 @@ BASH;
             password: $bundle['password'],
             privateKey: $bundle['private_key'],
             passphrase: $bundle['passphrase'],
-            timeout: max(5, min(20, (int) ($project['ssh_timeout'] ?? 10)))
+            timeout: max(5, min(20, (int) ($project['ssh_timeout'] ?? 10))),
+            expectedFingerprint: (string) ($project['host_fingerprint'] ?? '')
         );
 
         /** @var \phpseclib3\Net\SSH2 $ssh */
@@ -1153,7 +1225,7 @@ else
     exit 3
 fi
 BASH;
-            $out = trim($this->cleanScript((string) $ssh->exec($script)));
+            $out = trim((string) $ssh->exec($this->cleanScript($script)));
             if (!str_contains($out, 'CLEARED')) {
                 throw new \RuntimeException("Failed to clear remote log '{$cleanFile}': " . $out);
             }
@@ -1209,7 +1281,8 @@ BASH;
             password: $bundle['password'],
             privateKey: $bundle['private_key'],
             passphrase: $bundle['passphrase'],
-            timeout: max(5, min(20, (int) ($project['ssh_timeout'] ?? 10)))
+            timeout: max(5, min(20, (int) ($project['ssh_timeout'] ?? 10))),
+            expectedFingerprint: (string) ($project['host_fingerprint'] ?? '')
         );
 
         /** @var \phpseclib3\Net\SSH2 $ssh */
@@ -1247,13 +1320,16 @@ BASH;
     private function sanitizeLogPath(string $rawPath): ?string
     {
         $clean = trim(str_replace('\\', '/', $rawPath));
+        $clean = preg_replace('#^\./+#', '', $clean) ?? $clean;
         if ($clean === '' || str_starts_with($clean, '/') || str_starts_with($clean, '~')) {
             return null;
         }
-        if (preg_match('#\.\./\.\.#', $clean)) {
-            return null;
+        if (str_contains($clean, '..')) {
+            if ($clean !== '../error_log' && !preg_match('#^\.\./logs/[a-zA-Z0-9._-]+$#', $clean)) {
+                return null;
+            }
         }
-        if (preg_match('/[;&|`$<>"\']/', $clean)) {
+        if (preg_match('/[;&|`$<>"\'\r\n\0]/', $clean)) {
             return null;
         }
         if (!preg_match('/(\.log|error_log|\.txt)$/i', $clean)) {
@@ -1332,7 +1408,8 @@ BASH;
             password: $bundle['password'],
             privateKey: $bundle['private_key'],
             passphrase: $bundle['passphrase'],
-            timeout: max(5, min(20, (int) ($project['ssh_timeout'] ?? 10)))
+            timeout: max(5, min(20, (int) ($project['ssh_timeout'] ?? 10))),
+            expectedFingerprint: (string) ($project['host_fingerprint'] ?? '')
         );
 
         /** @var SSH2 $ssh */
@@ -1440,7 +1517,8 @@ BASH;
             password: $bundle['password'],
             privateKey: $bundle['private_key'],
             passphrase: $bundle['passphrase'],
-            timeout: max(5, min(20, (int) ($project['ssh_timeout'] ?? 10)))
+            timeout: max(5, min(20, (int) ($project['ssh_timeout'] ?? 10))),
+            expectedFingerprint: (string) ($project['host_fingerprint'] ?? '')
         );
 
         /** @var SSH2 $ssh */
