@@ -287,6 +287,7 @@
     let modalSaveCallback = null;
     const modalDrafts = new Map(); // contextKey ('new' | 'edit:<id>' | 'duplicate:<id>') -> raw field map
     let availableTemplateProjects = [];
+    let availableSshProfiles = [];
 
     function initProjectModal() {
         const modal = document.getElementById('projectModal');
@@ -294,6 +295,10 @@
 
         const dialog = document.getElementById('projectModalDialog');
         const form = document.getElementById('projectForm');
+        const profileSelect = document.getElementById('proj_ssh_profile_id');
+        const manageProfilesBtn = document.getElementById('manageProfilesQuickBtn');
+        const linkedProfileSummary = document.getElementById('linkedProfileSummary');
+        const customSshFieldsWrap = document.getElementById('customSshFieldsWrap');
         const authSelect = document.getElementById('proj_ssh_auth_type');
         const presetSelect = document.getElementById('proj_preset');
         const existingTemplatesGroup = document.getElementById('existingProjectTemplatesGroup');
@@ -321,15 +326,75 @@
         let currentSourceProject = null;
         let baselineSnapshot = '';
 
-        // Seed initial available projects for template cloning dropdown
-        if (window.INITIAL_DASHBOARD_DATA && Array.isArray(window.INITIAL_DASHBOARD_DATA.projects)) {
-            availableTemplateProjects = window.INITIAL_DASHBOARD_DATA.projects.slice();
+        // Seed initial available projects & shared SSH profiles
+        if (window.INITIAL_DASHBOARD_DATA) {
+            if (Array.isArray(window.INITIAL_DASHBOARD_DATA.projects)) {
+                availableTemplateProjects = window.INITIAL_DASHBOARD_DATA.projects.slice();
+            }
+            if (Array.isArray(window.INITIAL_DASHBOARD_DATA.ssh_profiles)) {
+                availableSshProfiles = window.INITIAL_DASHBOARD_DATA.ssh_profiles.slice();
+            }
         } else if (window.INITIAL_PROJECT_PAGE) {
             if (Array.isArray(window.INITIAL_PROJECT_PAGE.all_projects)) {
                 availableTemplateProjects = window.INITIAL_PROJECT_PAGE.all_projects.slice();
             } else if (window.INITIAL_PROJECT_PAGE.project) {
                 availableTemplateProjects = [window.INITIAL_PROJECT_PAGE.project];
             }
+            if (Array.isArray(window.INITIAL_PROJECT_PAGE.ssh_profiles)) {
+                availableSshProfiles = window.INITIAL_PROJECT_PAGE.ssh_profiles.slice();
+            }
+        }
+
+        function syncSshProfileOptions() {
+            if (!profileSelect) return;
+            const prevVal = profileSelect.value;
+            const opts = ['<option value="">Custom SSH Credentials (Standalone for this project)</option>'];
+            for (const sp of availableSshProfiles) {
+                if (sp && Number(sp.id) > 0) {
+                    const label = `${sp.name} (${sp.ssh_username}@${sp.ssh_host}:${sp.ssh_port})`;
+                    opts.push(`<option value="${Number(sp.id)}">${escapeHtml(label)}</option>`);
+                }
+            }
+            profileSelect.innerHTML = opts.join('');
+            if (prevVal && Array.from(profileSelect.options).some((o) => o.value === prevVal)) {
+                profileSelect.value = prevVal;
+            }
+        }
+
+        function syncSshProfileFields() {
+            if (!profileSelect) return;
+            const pid = Number(profileSelect.value || 0);
+            const prof = pid > 0 ? availableSshProfiles.find((s) => Number(s.id) === pid) : null;
+            const hostEl = document.getElementById('proj_ssh_host');
+            const portEl = document.getElementById('proj_ssh_port');
+            const userEl = document.getElementById('proj_ssh_username');
+
+            if (prof) {
+                if (customSshFieldsWrap) customSshFieldsWrap.style.display = 'none';
+                if (hostEl) { hostEl.required = false; hostEl.value = prof.ssh_host || ''; }
+                if (portEl) { portEl.required = false; portEl.value = prof.ssh_port || 22; }
+                if (userEl) { userEl.required = false; userEl.value = prof.ssh_username || ''; }
+                if (linkedProfileSummary) {
+                    linkedProfileSummary.style.display = 'block';
+                    linkedProfileSummary.innerHTML = `🔗 Linked to <strong>${escapeHtml(prof.name)}</strong> &bull; <code>${escapeHtml(prof.ssh_username)}@${escapeHtml(prof.ssh_host)}:${prof.ssh_port}</code> (${escapeHtml(prof.ssh_auth_type)} vault)`;
+                }
+            } else {
+                if (customSshFieldsWrap) customSshFieldsWrap.style.display = '';
+                if (hostEl) hostEl.required = true;
+                if (portEl) portEl.required = true;
+                if (userEl) userEl.required = true;
+                if (linkedProfileSummary) linkedProfileSummary.style.display = 'none';
+            }
+        }
+
+        function syncSymlinkVisibility(strategyVal) {
+            const isSymlink = strategyVal === 'symlink';
+            const releasesWrap = document.getElementById('projReleasesToKeepWrap');
+            const dirsWrap = document.getElementById('projSharedDirsWrap');
+            const filesWrap = document.getElementById('projSharedFilesWrap');
+            if (releasesWrap) releasesWrap.style.display = isSymlink ? '' : 'none';
+            if (dirsWrap) dirsWrap.style.display = isSymlink ? '' : 'none';
+            if (filesWrap) filesWrap.style.display = isSymlink ? '' : 'none';
         }
 
         function syncProjectTemplateOptions(ensureProject = null) {
@@ -370,7 +435,14 @@
             syncProjectTemplateOptions(currentSourceProject);
         };
 
+        window.DeployerApp.setAvailableProfiles = function (profilesList) {
+            availableSshProfiles = Array.isArray(profilesList) ? profilesList.slice() : [];
+            syncSshProfileOptions();
+            syncSshProfileFields();
+        };
+
         syncProjectTemplateOptions();
+        syncSshProfileOptions();
 
         function nudgeModal() {
             if (!dialog) return;
@@ -439,6 +511,7 @@
                 id: document.getElementById('proj_id').value,
                 source_project_id: document.getElementById('proj_source_id').value,
                 reuse_source_credentials: Boolean(reuseCredCheckbox && reuseCredCheckbox.checked),
+                ssh_profile_id: profileSelect ? profileSelect.value : '',
                 name: document.getElementById('proj_name').value,
                 environment: document.getElementById('proj_environment').value,
                 remote_path: document.getElementById('proj_remote_path').value,
@@ -453,8 +526,11 @@
                 ssh_password: pwInput.value,
                 ssh_private_key: document.getElementById('proj_ssh_private_key').value,
                 ssh_passphrase: document.getElementById('proj_ssh_passphrase').value,
+                env_vars: document.getElementById('proj_env_vars') ? document.getElementById('proj_env_vars').value : '',
                 deploy_strategy: document.getElementById('proj_deploy_strategy') ? document.getElementById('proj_deploy_strategy').value : 'direct',
                 releases_to_keep: document.getElementById('proj_releases_to_keep') ? document.getElementById('proj_releases_to_keep').value : 5,
+                shared_dirs: document.getElementById('proj_shared_dirs') ? document.getElementById('proj_shared_dirs').value : 'storage',
+                shared_files: document.getElementById('proj_shared_files') ? document.getElementById('proj_shared_files').value : '.env',
                 backup_db_before_deploy: Boolean(document.getElementById('proj_backup_db_before_deploy') && document.getElementById('proj_backup_db_before_deploy').checked),
                 backup_db_driver: document.getElementById('proj_backup_db_driver') ? document.getElementById('proj_backup_db_driver').value : 'auto',
                 health_check_url: document.getElementById('proj_health_check_url') ? document.getElementById('proj_health_check_url').value : '',
@@ -468,6 +544,9 @@
             document.getElementById('proj_source_id').value = fields.source_project_id ?? '';
             if (reuseCredCheckbox) {
                 reuseCredCheckbox.checked = Boolean(fields.reuse_source_credentials);
+            }
+            if (profileSelect) {
+                profileSelect.value = fields.ssh_profile_id ? String(fields.ssh_profile_id) : '';
             }
             document.getElementById('proj_name').value = fields.name ?? '';
             document.getElementById('proj_environment').value = fields.environment || 'production';
@@ -488,13 +567,18 @@
             pwInput.value = fields.ssh_password ?? '';
             document.getElementById('proj_ssh_private_key').value = fields.ssh_private_key ?? '';
             document.getElementById('proj_ssh_passphrase').value = fields.ssh_passphrase ?? '';
+            const envVarsEl = document.getElementById('proj_env_vars');
+            if (envVarsEl) envVarsEl.value = fields.env_vars ?? '';
 
             const stratEl = document.getElementById('proj_deploy_strategy');
             if (stratEl) stratEl.value = fields.deploy_strategy || 'direct';
-            const releasesWrap = document.getElementById('projReleasesToKeepWrap');
-            if (releasesWrap) releasesWrap.style.display = (fields.deploy_strategy === 'symlink') ? '' : 'none';
+            syncSymlinkVisibility(fields.deploy_strategy || 'direct');
             const releasesInput = document.getElementById('proj_releases_to_keep');
             if (releasesInput) releasesInput.value = fields.releases_to_keep ?? 5;
+            const sharedDirsEl = document.getElementById('proj_shared_dirs');
+            if (sharedDirsEl) sharedDirsEl.value = fields.shared_dirs ?? 'storage';
+            const sharedFilesEl = document.getElementById('proj_shared_files');
+            if (sharedFilesEl) sharedFilesEl.value = fields.shared_files ?? '.env';
 
             const backupDbCb = document.getElementById('proj_backup_db_before_deploy');
             if (backupDbCb) backupDbCb.checked = Boolean(fields.backup_db_before_deploy);
@@ -538,6 +622,7 @@
                 }
             }
 
+            syncSshProfileFields();
             syncAuthVisibility();
             syncCredentialBadgesAndHints();
             syncTemplateBadge();
@@ -563,6 +648,21 @@
                 if (draftNotice) draftNotice.style.display = 'none';
                 if (unsavedGuard) unsavedGuard.style.display = 'none';
             }
+        }
+
+        if (profileSelect) {
+            profileSelect.addEventListener('change', () => {
+                syncSshProfileFields();
+                syncDirtyIndicators();
+            });
+        }
+
+        if (manageProfilesBtn) {
+            manageProfilesBtn.addEventListener('click', () => {
+                if (window.DeployerApp.openSettingsModal) {
+                    window.DeployerApp.openSettingsModal('profiles');
+                }
+            });
         }
 
         authSelect.addEventListener('change', () => {
@@ -685,11 +785,13 @@
         function collectFormPayload() {
             const idVal = document.getElementById('proj_id').value;
             const sourceIdVal = document.getElementById('proj_source_id').value;
+            const profIdVal = profileSelect ? profileSelect.value : '';
             return {
                 id: idVal ? Number(idVal) : undefined,
                 project_id: idVal ? Number(idVal) : undefined,
                 source_project_id: (!idVal && sourceIdVal) ? Number(sourceIdVal) : undefined,
                 reuse_source_credentials: (!idVal && sourceIdVal) ? Boolean(reuseCredCheckbox && reuseCredCheckbox.checked) : false,
+                ssh_profile_id: profIdVal ? Number(profIdVal) : null,
                 name: document.getElementById('proj_name').value.trim(),
                 environment: document.getElementById('proj_environment').value,
                 remote_path: document.getElementById('proj_remote_path').value.trim(),
@@ -704,8 +806,11 @@
                 ssh_password: pwInput.value,
                 ssh_private_key: document.getElementById('proj_ssh_private_key').value.trim(),
                 ssh_passphrase: document.getElementById('proj_ssh_passphrase').value,
+                env_vars: document.getElementById('proj_env_vars') ? document.getElementById('proj_env_vars').value : '',
                 deploy_strategy: document.getElementById('proj_deploy_strategy') ? document.getElementById('proj_deploy_strategy').value : 'direct',
                 releases_to_keep: Number(document.getElementById('proj_releases_to_keep') ? document.getElementById('proj_releases_to_keep').value : 5) || 5,
+                shared_dirs: document.getElementById('proj_shared_dirs') ? document.getElementById('proj_shared_dirs').value.trim() : 'storage',
+                shared_files: document.getElementById('proj_shared_files') ? document.getElementById('proj_shared_files').value.trim() : '.env',
                 backup_db_before_deploy: Boolean(document.getElementById('proj_backup_db_before_deploy') && document.getElementById('proj_backup_db_before_deploy').checked),
                 backup_db_driver: document.getElementById('proj_backup_db_driver') ? document.getElementById('proj_backup_db_driver').value : 'auto',
                 health_check_url: document.getElementById('proj_health_check_url') ? document.getElementById('proj_health_check_url').value.trim() : null,
@@ -719,13 +824,26 @@
             const presetGroup = document.getElementById('presetGroup');
 
             function syncExtraOptions(p) {
+                if (profileSelect) {
+                    profileSelect.value = (p && p.ssh_profile_id) ? String(p.ssh_profile_id) : '';
+                }
+                const savedEnvBadge = document.getElementById('savedEnvVarsBadge');
+                if (savedEnvBadge) {
+                    savedEnvBadge.style.display = (p && p.has_env_vars) ? '' : 'none';
+                }
+                const envVarsEl = document.getElementById('proj_env_vars');
+                if (envVarsEl) envVarsEl.value = '';
+
                 const strat = p ? (p.deploy_strategy || 'direct') : 'direct';
                 const stratEl = document.getElementById('proj_deploy_strategy');
                 if (stratEl) stratEl.value = strat;
-                const releasesWrap = document.getElementById('projReleasesToKeepWrap');
-                if (releasesWrap) releasesWrap.style.display = (strat === 'symlink') ? '' : 'none';
+                syncSymlinkVisibility(strat);
                 const releasesInput = document.getElementById('proj_releases_to_keep');
                 if (releasesInput) releasesInput.value = p ? (p.releases_to_keep || 5) : 5;
+                const sharedDirsEl = document.getElementById('proj_shared_dirs');
+                if (sharedDirsEl) sharedDirsEl.value = p ? (p.shared_dirs ?? 'storage') : 'storage';
+                const sharedFilesEl = document.getElementById('proj_shared_files');
+                if (sharedFilesEl) sharedFilesEl.value = p ? (p.shared_files ?? '.env') : '.env';
 
                 const backupDb = p ? Boolean(p.backup_db_before_deploy) : false;
                 const backupDbCb = document.getElementById('proj_backup_db_before_deploy');
@@ -828,6 +946,7 @@
                 syncExtraOptions(null);
             }
 
+            syncSshProfileFields();
             syncAuthVisibility();
             syncCredentialBadgesAndHints();
             syncTemplateBadge();
@@ -836,8 +955,7 @@
         const stratEl = document.getElementById('proj_deploy_strategy');
         if (stratEl) {
             stratEl.addEventListener('change', () => {
-                const releasesWrap = document.getElementById('projReleasesToKeepWrap');
-                if (releasesWrap) releasesWrap.style.display = (stratEl.value === 'symlink') ? '' : 'none';
+                syncSymlinkVisibility(stratEl.value);
                 syncDirtyIndicators();
             });
         }
@@ -1052,6 +1170,18 @@
                 if (draftNotice) draftNotice.style.display = 'flex';
             } else {
                 if (draftNotice) draftNotice.style.display = 'none';
+                if (currentMode === 'edit' && currentSourceProject && currentSourceProject.has_env_vars) {
+                    const ctxCheck = currentContextKey;
+                    apiGet('get_project_vars', { project_id: currentSourceProject.id }).then((res) => {
+                        if (currentContextKey !== ctxCheck || modalDrafts.has(ctxCheck)) return;
+                        const envEl = document.getElementById('proj_env_vars');
+                        if (envEl && res && typeof res.env_vars === 'string') {
+                            envEl.value = res.env_vars;
+                            baselineSnapshot = serializeCurrentState();
+                            syncDirtyIndicators();
+                        }
+                    }).catch(() => {});
+                }
             }
 
             syncDirtyIndicators();
@@ -1979,6 +2109,369 @@
         };
     }
 
+    // =========================================================================
+    // Workspace Settings, Shared SSH Profiles, Outbound Alerts & Encrypted Vault
+    // =========================================================================
+    function initSettingsModal() {
+        const modal = document.getElementById('settingsModal');
+        const openBtn = document.getElementById('openSettingsModalBtn');
+        if (!modal) return;
+
+        const closeBtn = document.getElementById('settingsModalCloseBtn');
+        const footerCloseBtn = document.getElementById('settingsCloseFooterBtn');
+        const tabBtns = Array.from(modal.querySelectorAll('.settings-tab-btn'));
+        const panes = {
+            profiles: document.getElementById('settingsPaneProfiles'),
+            notifications: document.getElementById('settingsPaneNotifications'),
+            vault: document.getElementById('settingsPaneVault')
+        };
+
+        // Profiles tab elements
+        const profilesListEl = document.getElementById('sshProfilesList');
+        const newProfileBtn = document.getElementById('newSshProfileBtn');
+        const profileForm = document.getElementById('sshProfileForm');
+        const cancelProfileFormBtn = document.getElementById('cancelSshProfileFormBtn');
+        const profAuthSelect = document.getElementById('prof_ssh_auth_type');
+        const profPwWrap = document.getElementById('profPasswordWrap');
+        const profKeyWrap = document.getElementById('profKeyWrap');
+
+        // Notifications tab elements
+        const notifyForm = document.getElementById('notificationSettingsForm');
+        const notifyChannelSelect = document.getElementById('notify_channel');
+        const notifyWebhookWrap = document.getElementById('notifyWebhookUrlWrap');
+        const notifyTgTokenWrap = document.getElementById('notifyTelegramTokenWrap');
+        const notifyTgChatWrap = document.getElementById('notifyTelegramChatWrap');
+        const testNotifyBtn = document.getElementById('testNotificationBtn');
+
+        // Vault tab elements
+        const vaultExportForm = document.getElementById('vaultExportForm');
+        const vaultImportForm = document.getElementById('vaultImportForm');
+
+        function closeModal() {
+            modal.classList.remove('open');
+            modal.setAttribute('aria-hidden', 'true');
+            setTimeout(() => { modal.style.display = 'none'; }, 180);
+        }
+
+        if (closeBtn) closeBtn.addEventListener('click', closeModal);
+        if (footerCloseBtn) footerCloseBtn.addEventListener('click', closeModal);
+        modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+
+        function switchTab(tabKey) {
+            tabBtns.forEach((btn) => {
+                const isMatch = btn.dataset.settingsTab === tabKey;
+                btn.classList.toggle('active', isMatch);
+                btn.setAttribute('aria-selected', isMatch ? 'true' : 'false');
+            });
+            Object.entries(panes).forEach(([k, pane]) => {
+                if (pane) pane.style.display = (k === tabKey) ? 'block' : 'none';
+            });
+            if (tabKey === 'profiles') loadProfiles();
+            if (tabKey === 'notifications') loadNotifications();
+        }
+
+        tabBtns.forEach((btn) => {
+            btn.addEventListener('click', () => switchTab(btn.dataset.settingsTab));
+        });
+
+        function syncProfAuthUi() {
+            if (!profAuthSelect) return;
+            const isKey = profAuthSelect.value === 'key';
+            if (profPwWrap) profPwWrap.style.display = isKey ? 'none' : '';
+            if (profKeyWrap) profKeyWrap.style.display = isKey ? '' : 'none';
+        }
+        if (profAuthSelect) profAuthSelect.addEventListener('change', syncProfAuthUi);
+
+        function renderProfilesList() {
+            if (!profilesListEl) return;
+            if (!availableSshProfiles || availableSshProfiles.length === 0) {
+                profilesListEl.innerHTML = '<div style="padding:18px; text-align:center; background:var(--bg-input); border:1px dashed var(--border-subtle); border-radius:8px; color:var(--text-muted); font-size:12.5px;">No shared SSH server profiles yet. Create one to share credentials across multiple sites on the same server.</div>';
+                return;
+            }
+            profilesListEl.innerHTML = availableSshProfiles.map((sp) => `
+                <div class="ssh-profile-item" style="display:flex; justify-content:space-between; align-items:center; gap:10px; padding:10px 12px; background:var(--bg-input); border:1px solid var(--border-subtle); border-radius:8px; flex-wrap:wrap;">
+                    <div style="min-width:0;">
+                        <div style="font-weight:600; font-size:13px; color:var(--text-primary);">
+                            ${escapeHtml(sp.name)}
+                            <span class="badge" style="margin-left:6px; font-size:10.5px;">${Number(sp.project_count || 0)} project(s)</span>
+                        </div>
+                        <div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-secondary); margin-top:2px;">
+                            ${escapeHtml(sp.ssh_username)}@${escapeHtml(sp.ssh_host)}:${sp.ssh_port} &bull; ${escapeHtml(sp.ssh_auth_type)}
+                        </div>
+                    </div>
+                    <div style="display:flex; gap:6px;">
+                        <button type="button" class="btn btn-ghost btn-xs" data-prof-action="edit" data-prof-id="${sp.id}">Edit</button>
+                        <button type="button" class="btn btn-danger btn-xs" data-prof-action="delete" data-prof-id="${sp.id}">Delete</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function loadProfiles() {
+            try {
+                const res = await apiGet('list_ssh_profiles');
+                if (res && Array.isArray(res.profiles)) {
+                    if (window.DeployerApp.setAvailableProfiles) {
+                        window.DeployerApp.setAvailableProfiles(res.profiles);
+                    } else {
+                        availableSshProfiles = res.profiles;
+                    }
+                    renderProfilesList();
+                }
+            } catch (err) {
+                toast('Failed to load SSH profiles: ' + err.message, 'error');
+            }
+        }
+
+        function openProfileForm(prof = null) {
+            if (!profileForm) return;
+            profileForm.reset();
+            document.getElementById('prof_id').value = prof ? prof.id : '';
+            document.getElementById('sshProfileFormTitle').textContent = prof ? `Edit Profile — ${prof.name}` : 'Create Shared Server Profile';
+            document.getElementById('prof_name').value = prof ? (prof.name || '') : '';
+            document.getElementById('prof_ssh_host').value = prof ? (prof.ssh_host || '') : '';
+            document.getElementById('prof_ssh_port').value = prof ? (prof.ssh_port || 22) : 22;
+            document.getElementById('prof_ssh_username').value = prof ? (prof.ssh_username || '') : '';
+            document.getElementById('prof_ssh_auth_type').value = prof ? (prof.ssh_auth_type || 'password') : 'password';
+            document.getElementById('prof_ssh_timeout').value = prof ? (prof.ssh_timeout || 15) : 15;
+            document.getElementById('profSavedPwBadge').style.display = (prof && prof.has_password) ? '' : 'none';
+            document.getElementById('profSavedKeyBadge').style.display = (prof && prof.has_private_key) ? '' : 'none';
+            syncProfAuthUi();
+            profileForm.style.display = 'block';
+        }
+
+        if (newProfileBtn) newProfileBtn.addEventListener('click', () => openProfileForm(null));
+        if (cancelProfileFormBtn && profileForm) {
+            cancelProfileFormBtn.addEventListener('click', () => { profileForm.style.display = 'none'; });
+        }
+
+        if (profilesListEl) {
+            profilesListEl.addEventListener('click', async (e) => {
+                const btn = e.target.closest('button[data-prof-action]');
+                if (!btn) return;
+                const pid = Number(btn.dataset.profId);
+                const prof = availableSshProfiles.find((p) => Number(p.id) === pid);
+                if (!prof) return;
+
+                if (btn.dataset.profAction === 'edit') {
+                    openProfileForm(prof);
+                } else if (btn.dataset.profAction === 'delete') {
+                    const ok = await confirmAction({
+                        title: 'Delete Shared SSH Profile?',
+                        subtitle: prof.name,
+                        message: `Delete <strong>${escapeHtml(prof.name)}</strong>? Any linked projects will automatically retain their own standalone copy of the SSH credentials.`,
+                        confirmText: 'Delete Profile',
+                        confirmClass: 'btn-danger',
+                        icon: '🗑️',
+                        iconVariant: 'danger'
+                    });
+                    if (!ok) return;
+                    try {
+                        const res = await apiPost('delete_ssh_profile', { id: pid });
+                        if (window.DeployerApp.setAvailableProfiles && res.profiles) {
+                            window.DeployerApp.setAvailableProfiles(res.profiles);
+                        }
+                        renderProfilesList();
+                        window.dispatchEvent(new CustomEvent('deployer:data-changed', { detail: res }));
+                        toast('SSH profile deleted.', 'info');
+                    } catch (err) {
+                        toast(err.message, 'error');
+                    }
+                }
+            });
+        }
+
+        if (profileForm) {
+            profileForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const saveBtn = document.getElementById('saveSshProfileBtn');
+                const idVal = Number(document.getElementById('prof_id').value || 0);
+                const payload = {
+                    id: idVal || undefined,
+                    name: document.getElementById('prof_name').value.trim(),
+                    ssh_host: document.getElementById('prof_ssh_host').value.trim(),
+                    ssh_port: Number(document.getElementById('prof_ssh_port').value) || 22,
+                    ssh_username: document.getElementById('prof_ssh_username').value.trim(),
+                    ssh_auth_type: document.getElementById('prof_ssh_auth_type').value,
+                    ssh_timeout: Number(document.getElementById('prof_ssh_timeout').value) || 15,
+                    ssh_password: document.getElementById('prof_ssh_password').value,
+                    ssh_private_key: document.getElementById('prof_ssh_private_key').value.trim(),
+                    ssh_passphrase: document.getElementById('prof_ssh_passphrase').value
+                };
+                saveBtn.disabled = true;
+                try {
+                    const res = await apiPost(idVal ? 'update_ssh_profile' : 'create_ssh_profile', payload);
+                    if (window.DeployerApp.setAvailableProfiles && res.profiles) {
+                        window.DeployerApp.setAvailableProfiles(res.profiles);
+                    }
+                    profileForm.style.display = 'none';
+                    renderProfilesList();
+                    window.dispatchEvent(new CustomEvent('deployer:data-changed', { detail: res }));
+                    toast(idVal ? 'Shared SSH profile updated (linked projects synced).' : 'Shared SSH profile created.', 'success');
+                } catch (err) {
+                    toast(err.message, 'error');
+                } finally {
+                    saveBtn.disabled = false;
+                }
+            });
+        }
+
+        // Notifications Tab
+        function syncNotifyChannelUi() {
+            if (!notifyChannelSelect) return;
+            const isTg = notifyChannelSelect.value === 'telegram';
+            if (notifyWebhookWrap) notifyWebhookWrap.style.display = isTg ? 'none' : '';
+            if (notifyTgTokenWrap) notifyTgTokenWrap.style.display = isTg ? '' : 'none';
+            if (notifyTgChatWrap) notifyTgChatWrap.style.display = isTg ? '' : 'none';
+        }
+        if (notifyChannelSelect) notifyChannelSelect.addEventListener('change', syncNotifyChannelUi);
+
+        async function loadNotifications() {
+            try {
+                const res = await apiGet('get_notification_settings');
+                const s = (res && res.settings) || {};
+                document.getElementById('notify_enabled').checked = Boolean(s.enabled);
+                document.getElementById('notify_channel').value = s.channel || 'discord';
+                document.getElementById('notify_on_deploy_success').checked = s.on_deploy_success !== false;
+                document.getElementById('notify_on_deploy_failure').checked = s.on_deploy_failure !== false;
+                document.getElementById('notify_on_health_down').checked = s.on_health_down !== false;
+                document.getElementById('notify_webhook_url').value = '';
+                document.getElementById('notify_telegram_token').value = '';
+                document.getElementById('notify_telegram_chat_id').value = s.telegram_chat_id || '';
+                document.getElementById('notifySavedWebhookBadge').style.display = s.has_webhook_url ? '' : 'none';
+                document.getElementById('notifySavedTgBadge').style.display = s.has_telegram_token ? '' : 'none';
+                const hintEl = document.getElementById('notifyWebhookHint');
+                if (hintEl) {
+                    hintEl.textContent = s.has_webhook_url
+                        ? `Stored encrypted (${s.webhook_url_hint}). Leave blank to keep existing URL.`
+                        : 'Encrypted at rest with AES-256-GCM.';
+                }
+                syncNotifyChannelUi();
+            } catch (err) {
+                toast('Failed to load notification settings: ' + err.message, 'error');
+            }
+        }
+
+        if (notifyForm) {
+            notifyForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const btn = document.getElementById('saveNotificationsBtn');
+                btn.disabled = true;
+                try {
+                    await apiPost('save_notification_settings', {
+                        enabled: document.getElementById('notify_enabled').checked,
+                        channel: document.getElementById('notify_channel').value,
+                        on_deploy_success: document.getElementById('notify_on_deploy_success').checked,
+                        on_deploy_failure: document.getElementById('notify_on_deploy_failure').checked,
+                        on_health_down: document.getElementById('notify_on_health_down').checked,
+                        webhook_url: document.getElementById('notify_webhook_url').value.trim(),
+                        telegram_token: document.getElementById('notify_telegram_token').value.trim(),
+                        telegram_chat_id: document.getElementById('notify_telegram_chat_id').value.trim()
+                    });
+                    toast('Notification settings saved securely.', 'success');
+                    await loadNotifications();
+                } catch (err) {
+                    toast(err.message, 'error');
+                } finally {
+                    btn.disabled = false;
+                }
+            });
+        }
+
+        if (testNotifyBtn) {
+            testNotifyBtn.addEventListener('click', async () => {
+                testNotifyBtn.disabled = true;
+                const orig = testNotifyBtn.textContent;
+                testNotifyBtn.textContent = 'Sending...';
+                try {
+                    const res = await apiPost('test_notification', {});
+                    toast(res.message || 'Test alert sent!', 'success');
+                } catch (err) {
+                    toast(err.message, 'error');
+                } finally {
+                    testNotifyBtn.disabled = false;
+                    testNotifyBtn.textContent = orig;
+                }
+            });
+        }
+
+        // Vault Export / Import
+        if (vaultExportForm) {
+            vaultExportForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const btn = document.getElementById('exportVaultBtn');
+                const passEl = document.getElementById('vault_export_passphrase');
+                btn.disabled = true;
+                try {
+                    const res = await apiPost('export_vault', { passphrase: passEl.value });
+                    const blob = new Blob([JSON.stringify(res.bundle, null, 2)], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = res.filename || 'sshhh-vault-backup.json';
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    URL.revokeObjectURL(url);
+                    passEl.value = '';
+                    toast('Encrypted vault backup downloaded.', 'success');
+                } catch (err) {
+                    toast(err.message, 'error');
+                } finally {
+                    btn.disabled = false;
+                }
+            });
+        }
+
+        if (vaultImportForm) {
+            vaultImportForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const fileInput = document.getElementById('vault_import_file');
+                const passInput = document.getElementById('vault_import_passphrase');
+                const overwriteCb = document.getElementById('vault_import_overwrite');
+                const btn = document.getElementById('importVaultBtn');
+                if (!fileInput.files || !fileInput.files[0]) {
+                    toast('Select a vault backup .json file first.', 'warning');
+                    return;
+                }
+                btn.disabled = true;
+                try {
+                    const text = await fileInput.files[0].text();
+                    const parsed = JSON.parse(text);
+                    const res = await apiPost('import_vault', {
+                        bundle: parsed,
+                        passphrase: passInput.value,
+                        overwrite: overwriteCb.checked
+                    });
+                    const s = res.summary || {};
+                    if (window.DeployerApp.setAvailableProfiles && res.profiles) {
+                        window.DeployerApp.setAvailableProfiles(res.profiles);
+                    }
+                    window.dispatchEvent(new CustomEvent('deployer:data-changed', { detail: res }));
+                    passInput.value = '';
+                    vaultImportForm.reset();
+                    toast(`Vault restored: ${s.profiles_imported || 0} profile(s), ${s.projects_imported || 0} project(s) imported (${s.projects_skipped || 0} skipped).`, 'success', 5500);
+                } catch (err) {
+                    toast('Restore failed: ' + err.message, 'error');
+                } finally {
+                    btn.disabled = false;
+                }
+            });
+        }
+
+        window.DeployerApp.openSettingsModal = function (initialTab = 'profiles') {
+            modal.style.display = 'flex';
+            void modal.offsetWidth;
+            modal.classList.add('open');
+            modal.setAttribute('aria-hidden', 'false');
+            switchTab(initialTab);
+        };
+
+        if (openBtn) {
+            openBtn.addEventListener('click', () => window.DeployerApp.openSettingsModal('profiles'));
+        }
+    }
+
     window.DeployerApp = {
         escapeHtml,
         ansiToHtml,
@@ -1999,6 +2492,7 @@
         initRemoteEnvModal();
         initReleasesModal();
         initRemoteLogsModal();
+        initSettingsModal();
         initPwa();
         initStandaloneNavigationTrap();
     });

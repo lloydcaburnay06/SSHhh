@@ -34,3 +34,7 @@ jobs:
       - name: Run PHP syntax checks
         run: composer lint
 
+      - name: Run PHPUnit test suite
+        run: composer test
+
+

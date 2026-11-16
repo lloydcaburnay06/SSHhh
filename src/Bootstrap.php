@@ -13,8 +13,12 @@ final class Bootstrap
     private Database $database;
     private Crypto $crypto;
     private EventLogger $logger;
+    private SettingsRepository $settings;
+    private SshProfileRepository $profiles;
+    private Notifier $notifier;
     private ProjectRepository $projects;
     private SshRunner $runner;
+    private VaultBackup $vault;
 
     private function __construct()
     {
@@ -50,8 +54,12 @@ final class Bootstrap
         $this->database = new Database($this->config['db'], $storageDir);
         $this->crypto = new Crypto((string) $this->config['security']['key_file']);
         $this->logger = new EventLogger($this->database->pdo());
+        $this->settings = new SettingsRepository($this->database->pdo(), $this->crypto);
+        $this->profiles = new SshProfileRepository($this->database->pdo(), $this->crypto, $this->logger);
+        $this->notifier = new Notifier($this->settings);
         $this->projects = new ProjectRepository($this->database->pdo(), $this->crypto, $this->logger);
-        $this->runner = new SshRunner($this->projects, $this->logger);
+        $this->runner = new SshRunner($this->projects, $this->logger, $this->profiles, $this->notifier);
+        $this->vault = new VaultBackup($this->database->pdo(), $this->projects, $this->profiles, $this->settings, $this->crypto, $this->logger);
 
         AccessGuard::enforce($this->database->pdo(), $this->crypto, $this->csrfToken());
     }
@@ -103,6 +111,26 @@ final class Bootstrap
     public function runner(): SshRunner
     {
         return $this->runner;
+    }
+
+    public function settings(): SettingsRepository
+    {
+        return $this->settings;
+    }
+
+    public function profiles(): SshProfileRepository
+    {
+        return $this->profiles;
+    }
+
+    public function notifier(): Notifier
+    {
+        return $this->notifier;
+    }
+
+    public function vault(): VaultBackup
+    {
+        return $this->vault;
     }
 
     /**

@@ -137,6 +137,52 @@ final class EventLogger
         $stmt->execute($params);
     }
 
+    /**
+     * Periodically flushes incremental output and step states while a deployment is still running,
+     * enabling reconnectable live streams across page reloads or mobile network switches.
+     *
+     * @param array<int, mixed>|null $steps
+     */
+    public function updateLiveProgress(int $eventId, string $outputLog, ?array $steps = null): void
+    {
+        try {
+            if ($steps !== null) {
+                $stmt = $this->pdo->prepare('UPDATE `event_logs` SET `output_log` = :log, `steps_json` = :steps WHERE `id` = :id');
+                $stmt->execute([
+                    ':log'   => $outputLog,
+                    ':steps' => json_encode($steps, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                    ':id'    => $eventId,
+                ]);
+            } else {
+                $stmt = $this->pdo->prepare('UPDATE `event_logs` SET `output_log` = :log WHERE `id` = :id');
+                $stmt->execute([
+                    ':log' => $outputLog,
+                    ':id'  => $eventId,
+                ]);
+            }
+        } catch (\Throwable) {
+            // Never interrupt execution over progress flush
+        }
+    }
+
+    /**
+     * Returns the currently running (or most recent) deployment event for a project.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function getLatestDeploymentEvent(int $projectId): ?array
+    {
+        $stmt = $this->pdo->prepare(<<<'SQL'
+            SELECT * FROM `event_logs`
+            WHERE `project_id` = :pid AND `category` = 'deployment'
+            ORDER BY (`status` = 'running') DESC, `id` DESC
+            LIMIT 1
+        SQL);
+        $stmt->execute([':pid' => $projectId]);
+        $row = $stmt->fetch();
+        return $row ? $this->hydrateRow($row) : null;
+    }
+
     public function get(int $eventId): ?array
     {
         $stmt = $this->pdo->prepare('SELECT * FROM `event_logs` WHERE `id` = :id LIMIT 1');

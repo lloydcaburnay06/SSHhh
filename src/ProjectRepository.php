@@ -27,10 +27,15 @@ final class ProjectRepository
         $sql = <<<'SQL'
             SELECT
                 p.*,
+                sp.`name` AS `ssh_profile_name`,
+                sp.`ssh_password_encrypted` AS `profile_password_encrypted`,
+                sp.`ssh_private_key_encrypted` AS `profile_private_key_encrypted`,
+                sp.`ssh_passphrase_encrypted` AS `profile_passphrase_encrypted`,
                 (SELECT COUNT(*) FROM `project_commands` c WHERE c.`project_id` = p.`id`) AS `command_count`,
                 (SELECT COUNT(*) FROM `project_commands` c WHERE c.`project_id` = p.`id` AND c.`is_enabled` = 1) AS `enabled_command_count`,
                 (SELECT COUNT(*) FROM `event_logs` e WHERE e.`project_id` = p.`id` AND e.`category` = 'deployment') AS `deployment_count`
             FROM `projects` p
+            LEFT JOIN `ssh_profiles` sp ON sp.`id` = p.`ssh_profile_id`
             ORDER BY p.`sort_order` ASC, p.`id` DESC
         SQL;
 
@@ -131,10 +136,15 @@ final class ProjectRepository
         $sql = <<<'SQL'
             SELECT
                 p.*,
+                sp.`name` AS `ssh_profile_name`,
+                sp.`ssh_password_encrypted` AS `profile_password_encrypted`,
+                sp.`ssh_private_key_encrypted` AS `profile_private_key_encrypted`,
+                sp.`ssh_passphrase_encrypted` AS `profile_passphrase_encrypted`,
                 (SELECT COUNT(*) FROM `project_commands` c WHERE c.`project_id` = p.`id`) AS `command_count`,
                 (SELECT COUNT(*) FROM `project_commands` c WHERE c.`project_id` = p.`id` AND c.`is_enabled` = 1) AS `enabled_command_count`,
                 (SELECT COUNT(*) FROM `event_logs` e WHERE e.`project_id` = p.`id` AND e.`category` = 'deployment') AS `deployment_count`
             FROM `projects` p
+            LEFT JOIN `ssh_profiles` sp ON sp.`id` = p.`ssh_profile_id`
             WHERE p.`id` = :id
             LIMIT 1
         SQL;
@@ -146,16 +156,18 @@ final class ProjectRepository
     }
 
     /**
-     * Internal use by SshRunner only — never expose over HTTP responses.
+     * Internal use by SshRunner/VaultBackup only — never expose over HTTP responses.
      *
      * @return array{
      *   project: array<string, mixed>,
      *   password: string,
      *   private_key: string,
-     *   passphrase: string
+     *   passphrase: string,
+     *   env_vars: string,
+     *   env_vars_map: array<string, string>
      * }
      */
-    public function getWithDecryptedCredentials(int $id): array
+    public function getWithDecryptedCredentials(int $id, bool $resolveLinkedProfile = true): array
     {
         $stmt = $this->pdo->prepare('SELECT * FROM `projects` WHERE `id` = :id LIMIT 1');
         $stmt->execute([':id' => $id]);
@@ -165,18 +177,56 @@ final class ProjectRepository
             throw new InvalidArgumentException('Project not found.');
         }
 
+        $password = '';
+        $privateKey = '';
+        $passphrase = '';
+        $envVars = '';
+
         try {
-            $password = !empty($row['ssh_password_encrypted'])
-                ? $this->crypto->decrypt((string) $row['ssh_password_encrypted'], 'ssh-password')
-                : '';
+            $profileId = isset($row['ssh_profile_id']) && $row['ssh_profile_id'] !== null ? (int) $row['ssh_profile_id'] : null;
+            if ($resolveLinkedProfile && $profileId !== null && $profileId > 0) {
+                $pStmt = $this->pdo->prepare('SELECT * FROM `ssh_profiles` WHERE `id` = :pid LIMIT 1');
+                $pStmt->execute([':pid' => $profileId]);
+                $prof = $pStmt->fetch();
+                if ($prof) {
+                    $row['ssh_host'] = $prof['ssh_host'];
+                    $row['ssh_port'] = $prof['ssh_port'];
+                    $row['ssh_username'] = $prof['ssh_username'];
+                    $row['ssh_auth_type'] = $prof['ssh_auth_type'];
+                    $row['ssh_timeout'] = $prof['ssh_timeout'];
+                    $row['host_fingerprint'] = $prof['host_fingerprint'] ?? $row['host_fingerprint'];
+                    $row['ssh_profile_name'] = $prof['name'];
+                    $row['profile_password_encrypted'] = $prof['ssh_password_encrypted'];
+                    $row['profile_private_key_encrypted'] = $prof['ssh_private_key_encrypted'];
+                    $row['profile_passphrase_encrypted'] = $prof['ssh_passphrase_encrypted'];
 
-            $privateKey = !empty($row['ssh_private_key_encrypted'])
-                ? $this->crypto->decrypt((string) $row['ssh_private_key_encrypted'], 'ssh-private-key')
-                : '';
+                    $password = !empty($prof['ssh_password_encrypted'])
+                        ? $this->crypto->decrypt((string) $prof['ssh_password_encrypted'], 'ssh-profile-password')
+                        : '';
+                    $privateKey = !empty($prof['ssh_private_key_encrypted'])
+                        ? $this->crypto->decrypt((string) $prof['ssh_private_key_encrypted'], 'ssh-profile-key')
+                        : '';
+                    $passphrase = !empty($prof['ssh_passphrase_encrypted'])
+                        ? $this->crypto->decrypt((string) $prof['ssh_passphrase_encrypted'], 'ssh-profile-passphrase')
+                        : '';
+                }
+            } else {
+                $password = !empty($row['ssh_password_encrypted'])
+                    ? $this->crypto->decrypt((string) $row['ssh_password_encrypted'], 'ssh-password')
+                    : '';
 
-            $passphrase = !empty($row['ssh_passphrase_encrypted'])
-                ? $this->crypto->decrypt((string) $row['ssh_passphrase_encrypted'], 'ssh-passphrase')
-                : '';
+                $privateKey = !empty($row['ssh_private_key_encrypted'])
+                    ? $this->crypto->decrypt((string) $row['ssh_private_key_encrypted'], 'ssh-private-key')
+                    : '';
+
+                $passphrase = !empty($row['ssh_passphrase_encrypted'])
+                    ? $this->crypto->decrypt((string) $row['ssh_passphrase_encrypted'], 'ssh-passphrase')
+                    : '';
+            }
+
+            if (!empty($row['env_vars_encrypted'])) {
+                $envVars = $this->crypto->decrypt((string) $row['env_vars_encrypted'], 'project-env-vars');
+            }
         } catch (\Throwable $e) {
             throw new \RuntimeException(
                 "Could not decrypt SSH credentials for project '{$row['name']}'. The encryption key (storage/secret.key) was newly generated when cloning this repository. Please edit this project in the dashboard and re-enter its SSH password or private key.",
@@ -186,11 +236,54 @@ final class ProjectRepository
         }
 
         return [
-            'project'     => $this->sanitizeProjectRow($row),
-            'password'    => $password,
-            'private_key' => $privateKey,
-            'passphrase'  => $passphrase,
+            'project'      => $this->sanitizeProjectRow($row),
+            'password'     => $password,
+            'private_key'  => $privateKey,
+            'passphrase'   => $passphrase,
+            'env_vars'     => $envVars,
+            'env_vars_map' => self::parseEnvVars($envVars),
         ];
+    }
+
+    public function getDecryptedEnvVars(int $id): string
+    {
+        return $this->getWithDecryptedCredentials($id, false)['env_vars'];
+    }
+
+    /**
+     * Parses KEY=VALUE lines into an associative array for SSH environment export & {{VAR}} substitution.
+     *
+     * @return array<string, string>
+     */
+    public static function parseEnvVars(string $raw): array
+    {
+        $map = [];
+        $lines = preg_split('/\r\n|\r|\n/', $raw) ?: [];
+        foreach ($lines as $line) {
+            $trim = trim($line);
+            if ($trim === '' || str_starts_with($trim, '#')) {
+                continue;
+            }
+            if (str_starts_with($trim, 'export ')) {
+                $trim = trim(substr($trim, 7));
+            }
+            if (!str_contains($trim, '=')) {
+                continue;
+            }
+            [$k, $v] = explode('=', $trim, 2);
+            $k = trim($k);
+            if (!preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $k)) {
+                continue;
+            }
+            $v = trim($v);
+            if ((str_starts_with($v, '"') && str_ends_with($v, '"') && strlen($v) >= 2)
+                || (str_starts_with($v, "'") && str_ends_with($v, "'") && strlen($v) >= 2)
+            ) {
+                $v = substr($v, 1, -1);
+            }
+            $map[$k] = $v;
+        }
+        return $map;
     }
 
     /**
@@ -229,7 +322,19 @@ final class ProjectRepository
             }
         }
 
-        $data = $this->validateProjectInput($resolvedInput, true);
+        $profileId = isset($resolvedInput['ssh_profile_id']) && (int) $resolvedInput['ssh_profile_id'] > 0
+            ? (int) $resolvedInput['ssh_profile_id']
+            : null;
+        $linkedProfile = $this->resolveLinkedProfileRow($profileId);
+        if ($linkedProfile !== null) {
+            $resolvedInput['ssh_host'] = $linkedProfile['ssh_host'];
+            $resolvedInput['ssh_port'] = $linkedProfile['ssh_port'];
+            $resolvedInput['ssh_username'] = $linkedProfile['ssh_username'];
+            $resolvedInput['ssh_auth_type'] = $linkedProfile['ssh_auth_type'];
+            $resolvedInput['ssh_timeout'] = $linkedProfile['ssh_timeout'];
+        }
+
+        $data = $this->validateProjectInput($resolvedInput, true, $linkedProfile !== null);
 
         // Pre-validate template project before opening transaction if cloning from an existing project
         $preset = trim((string) ($input['preset'] ?? 'git_basic'));
@@ -244,16 +349,20 @@ final class ProjectRepository
             $clonedCommands = $this->listCommands($templateProjectId);
         }
 
-        $passwordEnc = $data['ssh_password'] !== ''
+        $passwordEnc = ($linkedProfile === null && $data['ssh_password'] !== '')
             ? $this->crypto->encrypt($data['ssh_password'], 'ssh-password')
             : null;
 
-        $privateKeyEnc = $data['ssh_private_key'] !== ''
+        $privateKeyEnc = ($linkedProfile === null && $data['ssh_private_key'] !== '')
             ? $this->crypto->encrypt($data['ssh_private_key'], 'ssh-private-key')
             : null;
 
-        $passphraseEnc = $data['ssh_passphrase'] !== ''
+        $passphraseEnc = ($linkedProfile === null && $data['ssh_passphrase'] !== '')
             ? $this->crypto->encrypt($data['ssh_passphrase'], 'ssh-passphrase')
+            : null;
+
+        $envVarsEnc = $data['env_vars'] !== ''
+            ? $this->crypto->encrypt($data['env_vars'], 'project-env-vars')
             : null;
 
         $this->pdo->beginTransaction();
@@ -268,6 +377,7 @@ final class ProjectRepository
                     `description`,
                     `repo_branch`,
                     `remote_path`,
+                    `ssh_profile_id`,
                     `ssh_host`,
                     `ssh_port`,
                     `ssh_username`,
@@ -275,8 +385,10 @@ final class ProjectRepository
                     `ssh_password_encrypted`,
                     `ssh_private_key_encrypted`,
                     `ssh_passphrase_encrypted`,
+                    `env_vars_encrypted`,
                     `ssh_timeout`,
                     `command_timeout`,
+                    `host_fingerprint`,
                     `health_check_url`,
                     `backup_db_before_deploy`,
                     `backup_db_driver`,
@@ -294,6 +406,7 @@ final class ProjectRepository
                     :description,
                     :repo_branch,
                     :remote_path,
+                    :ssh_profile_id,
                     :ssh_host,
                     :ssh_port,
                     :ssh_username,
@@ -301,8 +414,10 @@ final class ProjectRepository
                     :ssh_password_encrypted,
                     :ssh_private_key_encrypted,
                     :ssh_passphrase_encrypted,
+                    :env_vars_encrypted,
                     :ssh_timeout,
                     :command_timeout,
+                    :host_fingerprint,
                     :health_check_url,
                     :backup_db_before_deploy,
                     :backup_db_driver,
@@ -325,6 +440,7 @@ final class ProjectRepository
                 ':description'              => $data['description'],
                 ':repo_branch'              => $data['repo_branch'],
                 ':remote_path'              => $data['remote_path'],
+                ':ssh_profile_id'           => $linkedProfile ? (int) $linkedProfile['id'] : null,
                 ':ssh_host'                 => $data['ssh_host'],
                 ':ssh_port'                 => $data['ssh_port'],
                 ':ssh_username'             => $data['ssh_username'],
@@ -332,8 +448,10 @@ final class ProjectRepository
                 ':ssh_password_encrypted'   => $passwordEnc,
                 ':ssh_private_key_encrypted'=> $privateKeyEnc,
                 ':ssh_passphrase_encrypted' => $passphraseEnc,
+                ':env_vars_encrypted'       => $envVarsEnc,
                 ':ssh_timeout'              => $data['ssh_timeout'],
                 ':command_timeout'          => $data['command_timeout'],
+                ':host_fingerprint'         => $linkedProfile['host_fingerprint'] ?? ($input['host_fingerprint'] ?? null),
                 ':health_check_url'         => $data['health_check_url'],
                 ':backup_db_before_deploy'  => $data['backup_db_before_deploy'],
                 ':backup_db_driver'         => $data['backup_db_driver'],
@@ -455,6 +573,11 @@ final class ProjectRepository
             throw new InvalidArgumentException('Project not found.');
         }
 
+        $profileId = array_key_exists('ssh_profile_id', $input)
+            ? ((int) $input['ssh_profile_id'] > 0 ? (int) $input['ssh_profile_id'] : null)
+            : ($existing['ssh_profile_id'] !== null ? (int) $existing['ssh_profile_id'] : null);
+        $linkedProfile = $this->resolveLinkedProfileRow($profileId);
+
         // Allow partial updates (e.g. updating SSH settings only or project info only)
         $mergedInput = [
             'name'                    => $input['name'] ?? $existing['name'],
@@ -462,15 +585,16 @@ final class ProjectRepository
             'description'             => array_key_exists('description', $input) ? $input['description'] : $existing['description'],
             'repo_branch'             => $input['repo_branch'] ?? $existing['repo_branch'],
             'remote_path'             => array_key_exists('remote_path', $input) ? $input['remote_path'] : $existing['remote_path'],
-            'ssh_host'                => $input['ssh_host'] ?? $existing['ssh_host'],
-            'ssh_port'                => $input['ssh_port'] ?? $existing['ssh_port'],
-            'ssh_username'            => $input['ssh_username'] ?? $existing['ssh_username'],
-            'ssh_auth_type'           => $input['ssh_auth_type'] ?? $existing['ssh_auth_type'],
-            'ssh_timeout'             => $input['ssh_timeout'] ?? $existing['ssh_timeout'],
+            'ssh_host'                => $linkedProfile ? $linkedProfile['ssh_host'] : ($input['ssh_host'] ?? $existing['ssh_host']),
+            'ssh_port'                => $linkedProfile ? $linkedProfile['ssh_port'] : ($input['ssh_port'] ?? $existing['ssh_port']),
+            'ssh_username'            => $linkedProfile ? $linkedProfile['ssh_username'] : ($input['ssh_username'] ?? $existing['ssh_username']),
+            'ssh_auth_type'           => $linkedProfile ? $linkedProfile['ssh_auth_type'] : ($input['ssh_auth_type'] ?? $existing['ssh_auth_type']),
+            'ssh_timeout'             => $linkedProfile ? $linkedProfile['ssh_timeout'] : ($input['ssh_timeout'] ?? $existing['ssh_timeout']),
             'command_timeout'         => $input['command_timeout'] ?? $existing['command_timeout'],
             'ssh_password'            => $input['ssh_password'] ?? '',
             'ssh_private_key'         => $input['ssh_private_key'] ?? '',
             'ssh_passphrase'          => $input['ssh_passphrase'] ?? '',
+            'env_vars'                => array_key_exists('env_vars', $input) ? (string) $input['env_vars'] : null,
             'health_check_url'        => array_key_exists('health_check_url', $input) ? $input['health_check_url'] : $existing['health_check_url'],
             'backup_db_before_deploy' => array_key_exists('backup_db_before_deploy', $input) ? $input['backup_db_before_deploy'] : $existing['backup_db_before_deploy'],
             'backup_db_driver'        => $input['backup_db_driver'] ?? ($existing['backup_db_driver'] ?? 'auto'),
@@ -482,11 +606,13 @@ final class ProjectRepository
             'shared_files'            => array_key_exists('shared_files', $input) ? $input['shared_files'] : ($existing['shared_files'] ?? '.env'),
         ];
 
-        $data = $this->validateProjectInput($mergedInput, false);
+        $data = $this->validateProjectInput($mergedInput, false, $linkedProfile !== null);
 
         $passwordEnc = $existing['ssh_password_encrypted'];
         $passwordChanged = false;
-        if (!empty($input['clear_password'])) {
+        if ($linkedProfile !== null) {
+            $passwordEnc = null;
+        } elseif (!empty($input['clear_password'])) {
             $passwordEnc = null;
             $passwordChanged = true;
         } elseif ($data['ssh_password'] !== '') {
@@ -496,7 +622,9 @@ final class ProjectRepository
 
         $privateKeyEnc = $existing['ssh_private_key_encrypted'];
         $keyChanged = false;
-        if (!empty($input['clear_private_key'])) {
+        if ($linkedProfile !== null) {
+            $privateKeyEnc = null;
+        } elseif (!empty($input['clear_private_key'])) {
             $privateKeyEnc = null;
             $keyChanged = true;
         } elseif ($data['ssh_private_key'] !== '') {
@@ -506,7 +634,9 @@ final class ProjectRepository
 
         $passphraseEnc = $existing['ssh_passphrase_encrypted'];
         $passphraseChanged = false;
-        if (!empty($input['clear_passphrase'])) {
+        if ($linkedProfile !== null) {
+            $passphraseEnc = null;
+        } elseif (!empty($input['clear_passphrase'])) {
             $passphraseEnc = null;
             $passphraseChanged = true;
         } elseif ($data['ssh_passphrase'] !== '') {
@@ -514,8 +644,16 @@ final class ProjectRepository
             $passphraseChanged = true;
         }
 
+        $envVarsEnc = $existing['env_vars_encrypted'] ?? null;
+        if (array_key_exists('env_vars', $input)) {
+            $rawVars = trim((string) $input['env_vars']);
+            $envVarsEnc = $rawVars !== '' ? $this->crypto->encrypt($rawVars, 'project-env-vars') : null;
+        }
+
         $hostChanged = ($existing['ssh_host'] !== $data['ssh_host']) || ((int) $existing['ssh_port'] !== $data['ssh_port']);
-        $fingerprint = $hostChanged ? null : $existing['host_fingerprint'];
+        $fingerprint = $linkedProfile !== null
+            ? ($linkedProfile['host_fingerprint'] ?? null)
+            : ($hostChanged ? null : $existing['host_fingerprint']);
 
         $updStmt = $this->pdo->prepare(<<<'SQL'
             UPDATE `projects` SET
@@ -524,6 +662,7 @@ final class ProjectRepository
                 `description` = :description,
                 `repo_branch` = :repo_branch,
                 `remote_path` = :remote_path,
+                `ssh_profile_id` = :ssh_profile_id,
                 `ssh_host` = :ssh_host,
                 `ssh_port` = :ssh_port,
                 `ssh_username` = :ssh_username,
@@ -531,6 +670,7 @@ final class ProjectRepository
                 `ssh_password_encrypted` = :ssh_password_encrypted,
                 `ssh_private_key_encrypted` = :ssh_private_key_encrypted,
                 `ssh_passphrase_encrypted` = :ssh_passphrase_encrypted,
+                `env_vars_encrypted` = :env_vars_encrypted,
                 `ssh_timeout` = :ssh_timeout,
                 `command_timeout` = :command_timeout,
                 `host_fingerprint` = :host_fingerprint,
@@ -552,6 +692,7 @@ final class ProjectRepository
             ':description'               => $data['description'],
             ':repo_branch'               => $data['repo_branch'],
             ':remote_path'               => $data['remote_path'],
+            ':ssh_profile_id'            => $linkedProfile ? (int) $linkedProfile['id'] : null,
             ':ssh_host'                  => $data['ssh_host'],
             ':ssh_port'                  => $data['ssh_port'],
             ':ssh_username'              => $data['ssh_username'],
@@ -559,6 +700,7 @@ final class ProjectRepository
             ':ssh_password_encrypted'    => $passwordEnc,
             ':ssh_private_key_encrypted' => $privateKeyEnc,
             ':ssh_passphrase_encrypted'  => $passphraseEnc,
+            ':env_vars_encrypted'        => $envVarsEnc,
             ':ssh_timeout'               => $data['ssh_timeout'],
             ':command_timeout'           => $data['command_timeout'],
             ':host_fingerprint'          => $fingerprint,
@@ -990,8 +1132,19 @@ final class ProjectRepository
         if ($fingerprint === '') {
             return;
         }
+        $fp = mb_substr($fingerprint, 0, 255);
         $stmt = $this->pdo->prepare('UPDATE `projects` SET `host_fingerprint` = :fp WHERE `id` = :id');
-        $stmt->execute([':fp' => mb_substr($fingerprint, 0, 255), ':id' => $projectId]);
+        $stmt->execute([':fp' => $fp, ':id' => $projectId]);
+
+        $pStmt = $this->pdo->prepare('SELECT `ssh_profile_id` FROM `projects` WHERE `id` = :id LIMIT 1');
+        $pStmt->execute([':id' => $projectId]);
+        $profileId = (int) ($pStmt->fetchColumn() ?: 0);
+        if ($profileId > 0) {
+            $this->pdo->prepare('UPDATE `ssh_profiles` SET `host_fingerprint` = :fp WHERE `id` = :pid')
+                ->execute([':fp' => $fp, ':pid' => $profileId]);
+            $this->pdo->prepare('UPDATE `projects` SET `host_fingerprint` = :fp WHERE `ssh_profile_id` = :pid')
+                ->execute([':fp' => $fp, ':pid' => $profileId]);
+        }
     }
 
     public function regenerateWebhookToken(int $projectId): string
@@ -1047,10 +1200,27 @@ final class ProjectRepository
     }
 
     /**
+     * @return array<string, mixed>|null
+     */
+    private function resolveLinkedProfileRow(?int $profileId): ?array
+    {
+        if ($profileId === null || $profileId <= 0) {
+            return null;
+        }
+        $stmt = $this->pdo->prepare('SELECT * FROM `ssh_profiles` WHERE `id` = :id LIMIT 1');
+        $stmt->execute([':id' => $profileId]);
+        $row = $stmt->fetch();
+        if (!$row) {
+            throw new InvalidArgumentException('Selected SSH Server Profile was not found.');
+        }
+        return $row;
+    }
+
+    /**
      * @param array<string, mixed> $input
      * @return array<string, mixed>
      */
-    private function validateProjectInput(array $input, bool $isCreate): array
+    private function validateProjectInput(array $input, bool $isCreate, bool $usesLinkedProfile = false): array
     {
         $name = trim((string) ($input['name'] ?? ''));
         if ($name === '') {
@@ -1096,10 +1266,10 @@ final class ProjectRepository
         $privateKey = trim((string) ($input['ssh_private_key'] ?? ''));
         $passphrase = (string) ($input['ssh_passphrase'] ?? '');
 
-        if ($isCreate && $authType === 'password' && $password === '') {
+        if (!$usesLinkedProfile && $isCreate && $authType === 'password' && $password === '') {
             throw new InvalidArgumentException('SSH Password is required for password authentication.');
         }
-        if ($isCreate && $authType === 'key' && $privateKey === '') {
+        if (!$usesLinkedProfile && $isCreate && $authType === 'key' && $privateKey === '') {
             throw new InvalidArgumentException('SSH Private Key is required for key authentication.');
         }
 
@@ -1123,8 +1293,9 @@ final class ProjectRepository
         }
 
         $releasesToKeep = max(2, min(30, (int) ($input['releases_to_keep'] ?? 5)));
-        $sharedDirs = trim((string) ($input['shared_dirs'] ?? 'storage')) ?: 'storage';
-        $sharedFiles = trim((string) ($input['shared_files'] ?? '.env')) ?: '.env';
+        $sharedDirs = trim((string) ($input['shared_dirs'] ?? 'storage'));
+        $sharedFiles = trim((string) ($input['shared_files'] ?? '.env'));
+        $envVars = trim((string) ($input['env_vars'] ?? ''));
 
         return [
             'name'                    => mb_substr($name, 0, 150),
@@ -1139,6 +1310,7 @@ final class ProjectRepository
             'ssh_password'            => $password,
             'ssh_private_key'         => $privateKey,
             'ssh_passphrase'          => $passphrase,
+            'env_vars'                => $envVars,
             'ssh_timeout'             => $sshTimeout,
             'command_timeout'         => $commandTimeout,
             'health_check_url'        => $healthCheckUrl !== '' ? mb_substr($healthCheckUrl, 0, 500) : null,
@@ -1159,18 +1331,32 @@ final class ProjectRepository
      */
     private function sanitizeProjectRow(array $row): array
     {
-        $hasPassword = !empty($row['ssh_password_encrypted']);
-        $hasKey = !empty($row['ssh_private_key_encrypted']);
-        $hasPassphrase = !empty($row['ssh_passphrase_encrypted']);
+        $hasProfile = !empty($row['ssh_profile_id']);
+        $hasPassword = $hasProfile
+            ? !empty($row['profile_password_encrypted'])
+            : !empty($row['ssh_password_encrypted']);
+        $hasKey = $hasProfile
+            ? !empty($row['profile_private_key_encrypted'])
+            : !empty($row['ssh_private_key_encrypted']);
+        $hasPassphrase = $hasProfile
+            ? !empty($row['profile_passphrase_encrypted'])
+            : !empty($row['ssh_passphrase_encrypted']);
+        $hasEnvVars = !empty($row['env_vars_encrypted']);
 
         unset(
             $row['ssh_password_encrypted'],
             $row['ssh_private_key_encrypted'],
-            $row['ssh_passphrase_encrypted']
+            $row['ssh_passphrase_encrypted'],
+            $row['profile_password_encrypted'],
+            $row['profile_private_key_encrypted'],
+            $row['profile_passphrase_encrypted'],
+            $row['env_vars_encrypted']
         );
 
         $row['id'] = (int) $row['id'];
         $row['sort_order'] = isset($row['sort_order']) ? (int) $row['sort_order'] : 0;
+        $row['ssh_profile_id'] = isset($row['ssh_profile_id']) && $row['ssh_profile_id'] !== null ? (int) $row['ssh_profile_id'] : null;
+        $row['ssh_profile_name'] = isset($row['ssh_profile_name']) && $row['ssh_profile_name'] !== null ? (string) $row['ssh_profile_name'] : null;
         $row['ssh_port'] = (int) $row['ssh_port'];
         $row['ssh_timeout'] = (int) $row['ssh_timeout'];
         $row['command_timeout'] = (int) $row['command_timeout'];
@@ -1181,6 +1367,7 @@ final class ProjectRepository
         $row['has_password'] = $hasPassword;
         $row['has_private_key'] = $hasKey;
         $row['has_passphrase'] = $hasPassphrase;
+        $row['has_env_vars'] = $hasEnvVars;
         $row['app_status'] = (string) ($row['app_status'] ?? 'unknown');
         $row['app_status_updated_at'] = $row['app_status_updated_at'] ?? null;
         $row['health_check_url'] = !empty($row['health_check_url']) ? (string) $row['health_check_url'] : null;

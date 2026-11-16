@@ -11,6 +11,7 @@ $pageTitle = 'Projects Dashboard';
 $csrfToken = $app->csrfToken();
 $appTagline = (string) ($app->config()['app_tagline'] ?? 'Deployments so quiet, you can hear a server drop.');
 $initialProjects = $app->projects()->listAll();
+$initialProfiles = $app->profiles()->listAll();
 $initialStats = $app->projects()->getDashboardStats();
 $recentEvents = $app->logger()->query(null, ['limit' => 30]);
 
@@ -36,7 +37,11 @@ require __DIR__ . '/src/Views/header.php';
                         <button type="button" class="filter-pill filter-pill-down <?= (($initialStats['down_projects'] ?? 0) > 0) ? 'has-down' : '' ?>" data-env="app-down">🔴 Down (<span id="downFilterCount"><?= (int) ($initialStats['down_projects'] ?? 0) ?></span>)</button>
                     </div>
                 </div>
-                <div class="toolbar-right">
+                <div class="toolbar-right" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    <button type="button" class="btn btn-secondary btn-lg" id="checkAllHealthBtn" title="Ping all projects with configured Health Check URLs">
+                        <span>🩺</span>
+                        <span>Health Check All</span>
+                    </button>
                     <button type="button" class="btn btn-primary btn-lg toolbar-add-btn" id="addProjectBtn">
                         <span>+</span>
                         <span>Add Project</span>
@@ -92,12 +97,14 @@ require __DIR__ . '/src/Views/header.php';
 <?php require __DIR__ . '/src/Views/env_modal.php'; ?>
 <?php require __DIR__ . '/src/Views/rollback_modal.php'; ?>
 <?php require __DIR__ . '/src/Views/remote_logs_modal.php'; ?>
+<?php require __DIR__ . '/src/Views/settings_modal.php'; ?>
 
 <script>
     window.INITIAL_DASHBOARD_DATA = <?= json_encode([
-        'projects' => $initialProjects,
-        'stats'    => $initialStats,
-        'events'   => $recentEvents['items'],
+        'projects'     => $initialProjects,
+        'ssh_profiles' => $initialProfiles,
+        'stats'        => $initialStats,
+        'events'       => $recentEvents['items'],
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
 </script>
 <script src="assets/js/common.js?v=<?= (int) @filemtime(__DIR__ . '/assets/js/common.js') ?>"></script>

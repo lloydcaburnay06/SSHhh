@@ -88,7 +88,8 @@ try {
         $app->releaseSessionLock();
         $execRes = $app->runner()->execute(
             projectId: (int) $project['id'],
-            mode: 'deploy_all'
+            mode: 'deploy_all',
+            trigger: 'webhook'
         );
 
         respondJson([
@@ -302,6 +303,42 @@ try {
                 }
                 $relData = $app->runner()->listReleases($projectId);
                 respondJson(['ok' => true, 'result' => $relData]);
+
+            case 'get_live_run':
+                $projectId = (int) ($_GET['project_id'] ?? 0);
+                if ($projectId <= 0) {
+                    respondJson(['ok' => false, 'error' => 'Project ID is required.'], 422);
+                }
+                $app->projects()->recoverStaleRuns();
+                $proj = $app->projects()->find($projectId);
+                $latestEv = $app->logger()->getLatestDeploymentEvent($projectId);
+                respondJson([
+                    'ok'      => true,
+                    'project' => $proj,
+                    'event'   => $latestEv,
+                ]);
+
+            case 'get_project_vars':
+                $projectId = (int) ($_GET['project_id'] ?? 0);
+                if ($projectId <= 0) {
+                    respondJson(['ok' => false, 'error' => 'Project ID is required.'], 422);
+                }
+                respondJson([
+                    'ok'       => true,
+                    'env_vars' => $app->projects()->getDecryptedEnvVars($projectId),
+                ]);
+
+            case 'list_ssh_profiles':
+                respondJson([
+                    'ok'       => true,
+                    'profiles' => $app->profiles()->listAll(),
+                ]);
+
+            case 'get_notification_settings':
+                respondJson([
+                    'ok'       => true,
+                    'settings' => $app->settings()->getNotificationConfigPublic(),
+                ]);
 
             default:
                 respondJson(['ok' => false, 'error' => 'Unknown GET action.'], 400);
@@ -546,15 +583,137 @@ try {
         case 'check_health':
             $url = trim((string) ($body['url'] ?? ''));
             $projectId = (int) ($body['project_id'] ?? 0);
-            if ($url === '' && $projectId > 0) {
-                $proj = $app->projects()->find($projectId);
+            $proj = $projectId > 0 ? $app->projects()->find($projectId) : null;
+            if ($url === '' && $proj) {
                 $url = (string) ($proj['health_check_url'] ?? '');
             }
             $res = $app->runner()->checkHealth($url);
-            if ($projectId > 0 && $url !== '') {
-                $app->projects()->updateHealthStatus($projectId, $res['ok'] ? 'healthy' : 'unhealthy', $res['status_code']);
+            if ($projectId > 0 && $url !== '' && $proj) {
+                $prevStatus = (string) ($proj['last_health_status'] ?? 'unknown');
+                $newStatus = $res['ok'] ? 'healthy' : 'unhealthy';
+                $app->projects()->updateHealthStatus($projectId, $newStatus, $res['status_code']);
+                if ($newStatus === 'unhealthy' || ($prevStatus === 'unhealthy' && $newStatus === 'healthy')) {
+                    $app->notifier()->notifyHealthAlert($proj, $res['ok'], (int) $res['status_code'], $res['error'] ?? null);
+                }
             }
             respondJson(['ok' => true, 'result' => $res]);
+
+        case 'check_all_health':
+            $app->releaseSessionLock();
+            $all = $app->projects()->listAll();
+            $results = [];
+            $healthy = 0;
+            $unhealthy = 0;
+            foreach ($all as $proj) {
+                $url = trim((string) ($proj['health_check_url'] ?? ''));
+                if ($url === '') {
+                    continue;
+                }
+                $res = $app->runner()->checkHealth($url);
+                $prevStatus = (string) ($proj['last_health_status'] ?? 'unknown');
+                $newStatus = $res['ok'] ? 'healthy' : 'unhealthy';
+                $app->projects()->updateHealthStatus((int) $proj['id'], $newStatus, $res['status_code']);
+                if ($res['ok']) {
+                    $healthy++;
+                } else {
+                    $unhealthy++;
+                }
+                if ($newStatus === 'unhealthy' || ($prevStatus === 'unhealthy' && $newStatus === 'healthy')) {
+                    $app->notifier()->notifyHealthAlert($proj, $res['ok'], (int) $res['status_code'], $res['error'] ?? null);
+                }
+                $results[] = [
+                    'project_id'   => (int) $proj['id'],
+                    'project_name' => (string) $proj['name'],
+                    'ok'           => $res['ok'],
+                    'status_code'  => $res['status_code'],
+                    'duration_ms'  => $res['duration_ms'],
+                    'error'        => $res['error'],
+                ];
+            }
+            respondJson([
+                'ok'        => true,
+                'checked'   => count($results),
+                'healthy'   => $healthy,
+                'unhealthy' => $unhealthy,
+                'results'   => $results,
+                'projects'  => $app->projects()->listAll(),
+                'stats'     => $app->projects()->getDashboardStats(),
+            ]);
+
+        case 'create_ssh_profile':
+            $profile = $app->profiles()->create($body);
+            respondJson([
+                'ok'       => true,
+                'profile'  => $profile,
+                'profiles' => $app->profiles()->listAll(),
+            ], 201);
+
+        case 'update_ssh_profile':
+            $pid = (int) ($body['id'] ?? 0);
+            if ($pid <= 0) {
+                throw new InvalidArgumentException('Valid SSH Profile ID is required.');
+            }
+            $profile = $app->profiles()->update($pid, $body);
+            respondJson([
+                'ok'       => true,
+                'profile'  => $profile,
+                'profiles' => $app->profiles()->listAll(),
+                'projects' => $app->projects()->listAll(),
+            ]);
+
+        case 'delete_ssh_profile':
+            $pid = (int) ($body['id'] ?? 0);
+            if ($pid <= 0) {
+                throw new InvalidArgumentException('Valid SSH Profile ID is required.');
+            }
+            $app->profiles()->delete($pid);
+            respondJson([
+                'ok'       => true,
+                'profiles' => $app->profiles()->listAll(),
+                'projects' => $app->projects()->listAll(),
+            ]);
+
+        case 'save_notification_settings':
+            $saved = $app->settings()->saveNotificationConfig($body);
+            respondJson([
+                'ok'       => true,
+                'settings' => $saved,
+            ]);
+
+        case 'test_notification':
+            $app->notifier()->sendTest();
+            respondJson([
+                'ok'      => true,
+                'message' => 'Test notification delivered successfully.',
+            ]);
+
+        case 'export_vault':
+            $passphrase = (string) ($body['passphrase'] ?? '');
+            $bundle = $app->vault()->exportEncryptedVault($passphrase);
+            respondJson([
+                'ok'       => true,
+                'filename' => 'sshhh-vault-' . date('Ymd-His') . '.json',
+                'bundle'   => $bundle,
+            ]);
+
+        case 'import_vault':
+            $passphrase = (string) ($body['passphrase'] ?? '');
+            $bundle = $body['bundle'] ?? null;
+            if (is_string($bundle)) {
+                $bundle = json_decode($bundle, true);
+            }
+            if (!is_array($bundle)) {
+                throw new InvalidArgumentException('Valid encrypted vault JSON bundle is required.');
+            }
+            $overwrite = !empty($body['overwrite']);
+            $summary = $app->vault()->importEncryptedVault($bundle, $passphrase, $overwrite);
+            respondJson([
+                'ok'       => true,
+                'summary'  => $summary,
+                'projects' => $app->projects()->listAll(),
+                'profiles' => $app->profiles()->listAll(),
+                'stats'    => $app->projects()->getDashboardStats(),
+            ]);
 
         case 'list_releases':
             $projectId = (int) ($body['project_id'] ?? 0);

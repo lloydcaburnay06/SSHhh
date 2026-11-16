@@ -52,15 +52,17 @@ final class Database
             }
         }
 
-        $markerFile = rtrim($storageDir, '/\\') . '/.schema_v5.ready';
+        $markerFile = rtrim($storageDir, '/\\') . '/.schema_v6.ready';
         if ($needsMigration || !is_file($markerFile)) {
             $this->migrate();
             @file_put_contents($markerFile, date('c'));
         } else {
             // Quick sanity check in case tables or columns were altered manually via phpMyAdmin
             $stmt = $this->pdo->query("SHOW TABLES LIKE 'event_logs'");
-            $colStmt = $this->pdo->query("SHOW COLUMNS FROM `projects` LIKE 'health_check_url'");
+            $colStmt = $this->pdo->query("SHOW COLUMNS FROM `projects` LIKE 'ssh_profile_id'");
             $authStmt = $this->pdo->query("SHOW TABLES LIKE 'auth_state'");
+            $profStmt = $this->pdo->query("SHOW TABLES LIKE 'ssh_profiles'");
+            $settStmt = $this->pdo->query("SHOW TABLES LIKE 'app_settings'");
             if (
                 $stmt === false
                 || $stmt->fetchColumn() === false
@@ -68,6 +70,10 @@ final class Database
                 || $colStmt->fetch() === false
                 || $authStmt === false
                 || $authStmt->fetchColumn() === false
+                || $profStmt === false
+                || $profStmt->fetchColumn() === false
+                || $settStmt === false
+                || $settStmt->fetchColumn() === false
             ) {
                 $this->migrate();
                 @file_put_contents($markerFile, date('c'));
@@ -83,6 +89,26 @@ final class Database
     public function migrate(): void
     {
         $this->pdo->exec(<<<'SQL'
+            CREATE TABLE IF NOT EXISTS `ssh_profiles` (
+                `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+                `name` VARCHAR(150) NOT NULL,
+                `ssh_host` VARCHAR(255) NOT NULL,
+                `ssh_port` INT UNSIGNED NOT NULL DEFAULT 22,
+                `ssh_username` VARCHAR(120) NOT NULL,
+                `ssh_auth_type` ENUM('password', 'key') NOT NULL DEFAULT 'password',
+                `ssh_password_encrypted` TEXT NULL,
+                `ssh_private_key_encrypted` MEDIUMTEXT NULL,
+                `ssh_passphrase_encrypted` TEXT NULL,
+                `ssh_timeout` INT UNSIGNED NOT NULL DEFAULT 15,
+                `host_fingerprint` VARCHAR(255) NULL,
+                `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                PRIMARY KEY (`id`),
+                KEY `idx_profile_name` (`name`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        SQL);
+
+        $this->pdo->exec(<<<'SQL'
             CREATE TABLE IF NOT EXISTS `projects` (
                 `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
                 `name` VARCHAR(150) NOT NULL,
@@ -91,6 +117,7 @@ final class Database
                 `description` TEXT NULL,
                 `repo_branch` VARCHAR(120) NOT NULL DEFAULT 'main',
                 `remote_path` VARCHAR(500) NOT NULL DEFAULT '',
+                `ssh_profile_id` INT UNSIGNED NULL,
                 `ssh_host` VARCHAR(255) NOT NULL,
                 `ssh_port` INT UNSIGNED NOT NULL DEFAULT 22,
                 `ssh_username` VARCHAR(120) NOT NULL,
@@ -98,6 +125,7 @@ final class Database
                 `ssh_password_encrypted` TEXT NULL,
                 `ssh_private_key_encrypted` MEDIUMTEXT NULL,
                 `ssh_passphrase_encrypted` TEXT NULL,
+                `env_vars_encrypted` TEXT NULL,
                 `ssh_timeout` INT UNSIGNED NOT NULL DEFAULT 15,
                 `command_timeout` INT UNSIGNED NOT NULL DEFAULT 300,
                 `host_fingerprint` VARCHAR(255) NULL,
@@ -127,7 +155,11 @@ final class Database
                 KEY `idx_sort_order` (`sort_order`, `id`),
                 KEY `idx_app_status` (`app_status`),
                 KEY `idx_webhook_token` (`webhook_token`),
-                KEY `idx_updated_at` (`updated_at`)
+                KEY `idx_ssh_profile` (`ssh_profile_id`),
+                KEY `idx_updated_at` (`updated_at`),
+                CONSTRAINT `fk_projects_ssh_profile`
+                    FOREIGN KEY (`ssh_profile_id`) REFERENCES `ssh_profiles` (`id`)
+                    ON DELETE SET NULL
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         SQL);
 
@@ -184,6 +216,20 @@ final class Database
                     $tokenUpd->execute([':token' => $token, ':id' => (int) $row['id']]);
                 }
             }
+        }
+
+        // Non-destructive upgrade for v6 features (Shared SSH profiles & encrypted project variables)
+        $profileCol = $this->pdo->query("SHOW COLUMNS FROM `projects` LIKE 'ssh_profile_id'");
+        if ($profileCol === false || $profileCol->fetch() === false) {
+            $this->pdo->exec(<<<'SQL'
+                ALTER TABLE `projects`
+                    ADD COLUMN `ssh_profile_id` INT UNSIGNED NULL AFTER `remote_path`,
+                    ADD COLUMN `env_vars_encrypted` TEXT NULL AFTER `ssh_passphrase_encrypted`,
+                    ADD KEY `idx_ssh_profile` (`ssh_profile_id`),
+                    ADD CONSTRAINT `fk_projects_ssh_profile`
+                        FOREIGN KEY (`ssh_profile_id`) REFERENCES `ssh_profiles` (`id`)
+                        ON DELETE SET NULL
+            SQL);
         }
 
         $this->pdo->exec(<<<'SQL'
@@ -275,6 +321,15 @@ final class Database
                 `expires_at` DATETIME NOT NULL,
                 `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 KEY `idx_expires` (`expires_at`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        SQL);
+
+        $this->pdo->exec(<<<'SQL'
+            CREATE TABLE IF NOT EXISTS `app_settings` (
+                `setting_key` VARCHAR(100) NOT NULL PRIMARY KEY,
+                `setting_value_encrypted` TEXT NULL,
+                `is_encrypted` TINYINT(1) NOT NULL DEFAULT 0,
+                `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         SQL);
     }

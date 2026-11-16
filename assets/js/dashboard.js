@@ -181,7 +181,7 @@
                             <div class="meta-row">
                                 <span class="meta-key">SSH Target</span>
                                 <span class="meta-val" title="${App.escapeHtml(p.ssh_username + '@' + p.ssh_host + ':' + p.ssh_port)}">
-                                    ${App.escapeHtml(p.ssh_username)}@${App.escapeHtml(p.ssh_host)}:${p.ssh_port}
+                                    ${p.ssh_profile_name ? `<span class="badge" style="font-size:10px; padding:1px 6px; margin-right:4px;">🔗 ${App.escapeHtml(p.ssh_profile_name)}</span>` : ''}${App.escapeHtml(p.ssh_username)}@${App.escapeHtml(p.ssh_host)}:${p.ssh_port}
                                 </span>
                             </div>
                             <div class="meta-row">
@@ -555,6 +555,39 @@
         initProjectDragReorder();
 
         document.getElementById('addProjectBtn').addEventListener('click', openAddModal);
+
+        const checkAllHealthBtn = document.getElementById('checkAllHealthBtn');
+        if (checkAllHealthBtn) {
+            checkAllHealthBtn.addEventListener('click', async () => {
+                checkAllHealthBtn.disabled = true;
+                const origHtml = checkAllHealthBtn.innerHTML;
+                checkAllHealthBtn.innerHTML = '<span>⏳</span><span>Checking...</span>';
+                try {
+                    const res = await App.apiPost('check_all_health', {});
+                    if (Array.isArray(res.projects)) {
+                        projects = res.projects;
+                        if (App.setAvailableProjects) App.setAvailableProjects(projects);
+                        renderProjects();
+                    }
+                    if (res.checked === 0) {
+                        App.toast('No projects have a Health Check URL configured yet.', 'info');
+                    } else if (res.unhealthy > 0) {
+                        App.toast(`Health check: ${res.healthy} healthy, ${res.unhealthy} unhealthy!`, 'warning', 5000);
+                    } else {
+                        App.toast(`All ${res.healthy} monitored endpoint(s) are healthy (HTTP 2xx/3xx)!`, 'success');
+                    }
+                } catch (err) {
+                    App.toast('Health check failed: ' + err.message, 'error');
+                } finally {
+                    checkAllHealthBtn.disabled = false;
+                    checkAllHealthBtn.innerHTML = origHtml;
+                }
+            });
+        }
+
+        window.addEventListener('deployer:data-changed', () => {
+            refreshAll();
+        });
 
         document.getElementById('projectSearchInput').addEventListener('input', (e) => {
             searchQuery = e.target.value.trim();

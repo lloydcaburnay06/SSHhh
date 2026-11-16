@@ -3522,4 +3522,42 @@ body.app-shell > .container {
     color: #a7f3d0 !important;
 }
 
+.settings-modal {
+    max-width: 760px;
+    width: 94%;
+}
+
+.settings-tabs-bar {
+    display: flex;
+    gap: 6px;
+    padding: 10px 20px 0;
+    border-bottom: 1px solid var(--border-subtle);
+    background: rgba(15, 23, 42, 0.45);
+    overflow-x: auto;
+}
+
+.settings-tab-btn {
+    appearance: none;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--text-secondary);
+    padding: 8px 14px 10px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.settings-tab-btn:hover {
+    color: var(--text-primary);
+}
+
+.settings-tab-btn.active {
+    color: #a5b4fc;
+    border-bottom-color: var(--accent-primary);
+}
+
+
 

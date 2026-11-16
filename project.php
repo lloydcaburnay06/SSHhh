@@ -17,6 +17,7 @@ if (!$project) {
 
 $commands = $app->projects()->listCommands($projectId);
 $allProjects = $app->projects()->listAll();
+$sshProfiles = $app->profiles()->listAll();
 $eventsData = $app->logger()->query($projectId, ['limit' => 60]);
 
 $pageTitle = (string) $project['name'];
@@ -188,12 +189,14 @@ require __DIR__ . '/src/Views/header.php';
 <?php require __DIR__ . '/src/Views/env_modal.php'; ?>
 <?php require __DIR__ . '/src/Views/rollback_modal.php'; ?>
 <?php require __DIR__ . '/src/Views/remote_logs_modal.php'; ?>
+<?php require __DIR__ . '/src/Views/settings_modal.php'; ?>
 
 <script>
     window.INITIAL_PROJECT_PAGE = <?= json_encode([
         'project'      => $project,
         'commands'     => $commands,
         'all_projects' => $allProjects,
+        'ssh_profiles' => $sshProfiles,
         'events'       => $eventsData,
     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?>;
 </script>

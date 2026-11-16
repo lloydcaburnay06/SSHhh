@@ -77,6 +77,20 @@
                 </div>
 
                 <div class="form-section-title" id="sshSectionHeader">SSH Connection &amp; Encrypted Credentials</div>
+                <div class="form-group" style="margin-bottom:14px;">
+                    <label for="proj_ssh_profile_id">SSH Server Profile</label>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <select class="form-select" id="proj_ssh_profile_id" style="flex:1;">
+                            <option value="">Custom SSH Credentials (Standalone for this project)</option>
+                        </select>
+                        <button type="button" class="btn btn-secondary btn-sm" id="manageProfilesQuickBtn" title="Manage Shared SSH Profiles" style="white-space:nowrap;">Manage Profiles</button>
+                    </div>
+                    <span class="form-hint" id="sshProfileHint">Link multiple projects on the same server to one Shared SSH Profile, or enter custom credentials below.</span>
+                </div>
+
+                <div id="linkedProfileSummary" style="display:none; padding:10px 12px; background:rgba(99, 102, 241, 0.1); border:1px solid rgba(99, 102, 241, 0.3); border-radius:8px; margin-bottom:14px; font-size:12.5px;"></div>
+
+                <div id="customSshFieldsWrap">
                 <div class="form-grid-3">
                     <div class="form-group">
                         <label for="proj_ssh_host">SSH Host / IP *</label>
@@ -137,6 +151,7 @@
                         </div>
                     </div>
                 </div>
+                </div>
 
                 <div class="ssh-test-banner" id="modalSshTestBanner"></div>
 
@@ -156,6 +171,27 @@
                         <label for="proj_releases_to_keep">Releases to Keep</label>
                         <input type="number" class="form-control" id="proj_releases_to_keep" min="2" max="30" value="5">
                         <span class="form-hint">Older releases are automatically pruned after successful deploys.</span>
+                    </div>
+
+                    <div class="form-group" id="projSharedDirsWrap" style="display:none;">
+                        <label for="proj_shared_dirs">Shared Directories (Symlink Mode)</label>
+                        <input type="text" class="form-control" id="proj_shared_dirs" value="storage" placeholder="storage, public/uploads">
+                        <span class="form-hint">Comma-separated folders persisted across releases in <code>shared/</code>.</span>
+                    </div>
+
+                    <div class="form-group" id="projSharedFilesWrap" style="display:none;">
+                        <label for="proj_shared_files">Shared Files (Symlink Mode)</label>
+                        <input type="text" class="form-control" id="proj_shared_files" value=".env" placeholder=".env, auth.json">
+                        <span class="form-hint">Comma-separated files persisted across releases in <code>shared/</code>.</span>
+                    </div>
+
+                    <div class="form-group full">
+                        <label for="proj_env_vars">
+                            <span>Encrypted Deployment Variables (<code>{{VAR}}</code> &amp; shell exports)</span>
+                            <span class="secret-saved-hint" id="savedEnvVarsBadge" style="display:none;">&#128274; Encrypted variables stored</span>
+                        </label>
+                        <textarea class="step-cmd-editor" id="proj_env_vars" rows="3" placeholder="API_TOKEN=secret-value&#10;PHP_BIN=/usr/bin/php8.3"></textarea>
+                        <span class="form-hint">One <code>KEY=VALUE</code> per line. Automatically exported to commands as <code>$KEY</code> and substituted for <code>{{KEY}}</code>, while redacted from logs.</span>
                     </div>
 
                     <div class="form-group full" style="padding:12px; background:var(--bg-elevated); border:1px solid var(--border-color); border-radius:8px;">

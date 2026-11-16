@@ -458,11 +458,81 @@
         }
     }
 
+    let liveAttachTimer = null;
+
+    async function pollLiveRunOnce() {
+        try {
+            const res = await App.apiGet('get_live_run', { project_id: project.id });
+            if (!res) return;
+            if (res.project) {
+                project = res.project;
+                syncAvailableProjectsState(project);
+                renderHero();
+            }
+            const ev = res.event;
+            if (ev && typeof ev.output_log === 'string') {
+                setConsoleText(ev.output_log + '\n');
+            }
+            if (ev && Array.isArray(ev.steps)) {
+                activeStepStates = {};
+                ev.steps.forEach((s) => {
+                    if (s && s.command_id) {
+                        const idx = commands.findIndex((c) => Number(c.id) === Number(s.command_id));
+                        if (idx !== -1) {
+                            activeStepStates[idx] = s.status === 'success' ? 'success' : 'failed';
+                        }
+                    }
+                });
+            }
+            if (!ev || ev.status !== 'running') {
+                if (liveAttachTimer) {
+                    clearInterval(liveAttachTimer);
+                    liveAttachTimer = null;
+                }
+                const finalStatus = ev ? ev.status : (project.last_deploy_status || 'info');
+                stopTimer(ev ? ev.duration_ms : null);
+                setExecutionLock(false, App.statusBadgeHtml(finalStatus));
+                await loadEvents();
+                if (ev && ev.title) {
+                    App.toast(ev.title, finalStatus === 'success' ? 'success' : 'error');
+                }
+                return;
+            }
+            renderCommands();
+        } catch {
+            // Silently retry next poll interval
+        }
+    }
+
+    function attachToLiveRunIfRunning() {
+        if (!project || project.last_deploy_status !== 'running' || isExecuting) {
+            return;
+        }
+        setExecutionLock(true, App.statusBadgeHtml('running'));
+        startTimer();
+        App.toast('Re-attached to active deployment stream.', 'info');
+        pollLiveRunOnce();
+        liveAttachTimer = setInterval(pollLiveRunOnce, 1000);
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
         syncAvailableProjectsState(project);
         renderHero();
         renderCommands();
         renderEvents();
+        attachToLiveRunIfRunning();
+
+        window.addEventListener('deployer:data-changed', async () => {
+            try {
+                const res = await App.apiGet('get_project', { id: project.id });
+                if (res && res.project) {
+                    project = res.project;
+                    syncAvailableProjectsState(project);
+                    renderHero();
+                }
+            } catch {
+            }
+        });
 
         // Top Hero Buttons
         document.getElementById('deployAllBtn').addEventListener('click', async () => {

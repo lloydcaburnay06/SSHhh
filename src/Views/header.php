@@ -49,6 +49,10 @@ $appTagline = (string) ($app->config()['app_tagline'] ?? 'Deployments so quiet, 
                     <span class="security-pill-full">AES-256-GCM Vault</span>
                     <span class="security-pill-short">AES-256</span>
                 </span>
+                <button type="button" class="btn btn-secondary btn-sm" id="openSettingsModalBtn" title="Shared SSH Profiles, Outbound Alerts &amp; Vault Backup">
+                    <span>&#9881;&#65039;</span>
+                    <span class="hide-xs">Settings</span>
+                </button>
                 <?php if ($app->isAuthEnabled()): ?>
                     <a href="index.php?logout=1" class="btn btn-ghost btn-sm">Sign Out</a>
                 <?php endif; ?>

@@ -14,7 +14,9 @@ final class SshRunner
 {
     public function __construct(
         private ProjectRepository $projects,
-        private EventLogger $logger
+        private EventLogger $logger,
+        private ?SshProfileRepository $profiles = null,
+        private ?Notifier $notifier = null
     ) {
     }
 
@@ -35,6 +37,14 @@ final class SshRunner
             $savedBundle = $this->projects->getWithDecryptedCredentials($projectId);
         }
 
+        $profileId = isset($input['ssh_profile_id']) && (int) $input['ssh_profile_id'] > 0
+            ? (int) $input['ssh_profile_id']
+            : null;
+        $profileBundle = null;
+        if ($profileId !== null && $this->profiles !== null) {
+            $profileBundle = $this->profiles->getWithDecryptedCredentials($profileId);
+        }
+
         $sourceProjectId = ($projectId === null && !empty($input['reuse_source_credentials']) && isset($input['source_project_id']) && (int) $input['source_project_id'] > 0)
             ? (int) $input['source_project_id']
             : null;
@@ -44,26 +54,27 @@ final class SshRunner
         }
 
         $savedProject = $savedBundle['project'] ?? null;
+        $linkedProfile = $profileBundle['profile'] ?? null;
 
-        $host = trim((string) ($input['ssh_host'] ?? ($savedProject['ssh_host'] ?? '')));
-        $port = (int) ($input['ssh_port'] ?? ($savedProject['ssh_port'] ?? 22));
-        $username = trim((string) ($input['ssh_username'] ?? ($savedProject['ssh_username'] ?? '')));
-        $authType = strtolower(trim((string) ($input['ssh_auth_type'] ?? ($savedProject['ssh_auth_type'] ?? 'password'))));
+        $host = trim((string) ($linkedProfile['ssh_host'] ?? ($input['ssh_host'] ?? ($savedProject['ssh_host'] ?? ''))));
+        $port = (int) ($linkedProfile['ssh_port'] ?? ($input['ssh_port'] ?? ($savedProject['ssh_port'] ?? 22)));
+        $username = trim((string) ($linkedProfile['ssh_username'] ?? ($input['ssh_username'] ?? ($savedProject['ssh_username'] ?? ''))));
+        $authType = strtolower(trim((string) ($linkedProfile['ssh_auth_type'] ?? ($input['ssh_auth_type'] ?? ($savedProject['ssh_auth_type'] ?? 'password')))));
         $remotePath = trim((string) ($input['remote_path'] ?? ($savedProject['remote_path'] ?? '')));
-        $timeout = max(3, min(60, (int) ($input['ssh_timeout'] ?? ($savedProject['ssh_timeout'] ?? 15))));
+        $timeout = max(3, min(60, (int) ($linkedProfile['ssh_timeout'] ?? ($input['ssh_timeout'] ?? ($savedProject['ssh_timeout'] ?? 15)))));
 
-        $password = (string) ($input['ssh_password'] ?? '');
+        $password = $profileBundle !== null ? $profileBundle['password'] : (string) ($input['ssh_password'] ?? '');
         if ($password === '' && $fallbackBundle !== null) {
             $password = $fallbackBundle['password'];
         }
 
         $rawPrivateKey = trim((string) ($input['ssh_private_key'] ?? ''));
-        $privateKey = $rawPrivateKey;
+        $privateKey = $profileBundle !== null ? $profileBundle['private_key'] : $rawPrivateKey;
         if ($privateKey === '' && $fallbackBundle !== null) {
             $privateKey = $fallbackBundle['private_key'];
         }
 
-        $passphrase = (string) ($input['ssh_passphrase'] ?? '');
+        $passphrase = $profileBundle !== null ? $profileBundle['passphrase'] : (string) ($input['ssh_passphrase'] ?? '');
         if ($passphrase === '' && $rawPrivateKey === '' && $fallbackBundle !== null) {
             $passphrase = $fallbackBundle['passphrase'];
         }
@@ -241,7 +252,8 @@ final class SshRunner
         ?int $commandId = null,
         ?string $adhocCommand = null,
         ?callable $emit = null,
-        ?string $customDirectory = null
+        ?string $customDirectory = null,
+        string $trigger = 'manual'
     ): array {
         @set_time_limit(0);
         @ignore_user_abort(true);
@@ -340,7 +352,7 @@ final class SshRunner
         }
 
         try {
-            return $this->runSteps($projectId, $mode, $project, $bundle, $projectName, $remotePath, $branch, $env, $target, $stepsToRun, $category, $eventType, $initialTitle, $commandSummary, $send);
+            return $this->runSteps($projectId, $mode, $project, $bundle, $projectName, $remotePath, $branch, $env, $target, $stepsToRun, $category, $eventType, $initialTitle, $commandSummary, $send, $trigger);
         } finally {
             if ($holdsLock) {
                 $this->projects->releaseDeployLock($projectId);
@@ -369,8 +381,17 @@ final class SshRunner
         string $eventType,
         string $initialTitle,
         string $commandSummary,
-        callable $send
+        callable $send,
+        string $trigger = 'manual'
     ): array {
+        $envVarsMap = is_array($bundle['env_vars_map'] ?? null) ? $bundle['env_vars_map'] : [];
+        $extraSecrets = array_values(array_filter(array_merge(
+            [(string) ($bundle['password'] ?? ''), (string) ($bundle['passphrase'] ?? '')],
+            array_map('strval', array_values($envVarsMap))
+        ), static fn(string $s): bool => $s !== ''));
+
+        $redact = static fn(string $text): string => SecretRedactor::redact($text, $extraSecrets);
+
         $eventId = $this->logger->log([
             'project_id'   => $projectId,
             'project_name' => $projectName,
@@ -379,7 +400,7 @@ final class SshRunner
             'status'       => 'running',
             'title'        => $initialTitle,
             'ssh_target'   => $target,
-            'command_text' => $commandSummary,
+            'command_text' => $redact($commandSummary),
             'completed'    => false,
         ]);
 
@@ -402,6 +423,14 @@ final class SshRunner
         );
         $transcript[] = $headerLine;
 
+        $flushLive = function (string $extraTail = '') use ($eventId, &$transcript, &$stepResults, $redact): void {
+            $body = implode("\n", $transcript);
+            if ($extraTail !== '') {
+                $body .= "\n" . rtrim($extraTail, "\r\n");
+            }
+            $this->logger->updateLiveProgress($eventId, $redact($body), $stepResults);
+        };
+
         $send([
             'type'        => 'init',
             'event_id'    => $eventId,
@@ -410,6 +439,7 @@ final class SshRunner
             'total_steps' => $totalSteps,
             'message'     => $headerLine,
         ]);
+        $flushLive();
 
         $ssh = null;
         try {
@@ -440,6 +470,7 @@ final class SshRunner
                 'fingerprint' => $fingerprint,
                 'message'     => $connLine,
             ]);
+            $flushLive();
 
             $ssh->disableQuietMode();
             $ssh->setTimeout((int) $project['command_timeout']);
@@ -448,6 +479,7 @@ final class SshRunner
             if ($mode === 'deploy_all') {
                 if (!empty($project['backup_db_before_deploy'])) {
                     $this->runPreDeployBackup($ssh, $project, $remotePath, $send, $transcript);
+                    $flushLive();
                 }
 
                 if (($project['deploy_strategy'] ?? 'direct') === 'symlink') {
@@ -455,6 +487,7 @@ final class SshRunner
                     if ($symlinkInfo !== null) {
                         $remotePath = $symlinkInfo['release_dir'];
                     }
+                    $flushLive();
                 }
             }
 
@@ -467,7 +500,7 @@ final class SshRunner
                     $stepNum,
                     $totalSteps,
                     $step['name'],
-                    str_replace("\n", "\n  ", $step['command'])
+                    str_replace("\n", "\n  ", $redact($step['command']))
                 );
                 $transcript[] = $stepHeader;
 
@@ -477,26 +510,35 @@ final class SshRunner
                     'total_steps' => $totalSteps,
                     'command_id'  => $step['id'],
                     'name'        => $step['name'],
-                    'command'     => $step['command'],
+                    'command'     => $redact($step['command']),
                     'message'     => $stepHeader,
                 ]);
+                $flushLive();
 
                 $wrappedCommand = $this->wrapRemoteCommand(
                     command: $step['command'],
                     remotePath: $remotePath,
                     branch: $branch,
                     environment: $env,
-                    stopOnError: $step['stop_on_error']
+                    stopOnError: $step['stop_on_error'],
+                    envVars: $envVarsMap
                 );
 
                 $stepOutput = '';
-                $execResult = $ssh->exec($wrappedCommand, static function (string $chunk) use (&$stepOutput, $send, $stepNum): void {
-                    $stepOutput .= $chunk;
+                $lastFlushAt = microtime(true);
+                $execResult = $ssh->exec($wrappedCommand, static function (string $chunk) use (&$stepOutput, &$lastFlushAt, $send, $stepNum, $redact, $flushLive): void {
+                    $safeChunk = $redact($chunk);
+                    $stepOutput .= $safeChunk;
                     $send([
                         'type'        => 'chunk',
                         'step_number' => $stepNum,
-                        'data'        => $chunk,
+                        'data'        => $safeChunk,
                     ]);
+                    $now = microtime(true);
+                    if (($now - $lastFlushAt) >= 0.45) {
+                        $lastFlushAt = $now;
+                        $flushLive($stepOutput);
+                    }
                 });
 
                 $stepDurationMs = (int) round((hrtime(true) - $stepStart) / 1_000_000);
@@ -548,11 +590,11 @@ final class SshRunner
                     'step_number' => $stepNum,
                     'command_id'  => $step['id'],
                     'name'        => $step['name'],
-                    'command'     => $step['command'],
+                    'command'     => $redact($step['command']),
                     'status'      => $stepStatus,
                     'exit_code'   => $exitCode,
                     'duration_ms' => $stepDurationMs,
-                    'output'      => $stepOutput,
+                    'output'      => $redact($stepOutput),
                 ];
                 $stepResults[] = $stepRecord;
 
@@ -566,6 +608,7 @@ final class SshRunner
                     'app_status'  => $currentAppStatus,
                     'message'     => $stepFooter,
                 ]);
+                $flushLive();
 
                 if (!$stepSucceeded) {
                     $finalExitCode = $exitCode;
@@ -583,6 +626,7 @@ final class SshRunner
                             'type'    => 'aborted',
                             'message' => $abortMsg,
                         ]);
+                        $flushLive();
                         break;
                     }
                 }
@@ -604,11 +648,11 @@ final class SshRunner
         } catch (Throwable $e) {
             $overallStatus = 'failed';
             $finalExitCode = $finalExitCode !== 0 ? $finalExitCode : 255;
-            $errLine = sprintf("\n[%s] [SSH ERROR] %s", date('H:i:s'), $e->getMessage());
+            $errLine = sprintf("\n[%s] [SSH ERROR] %s", date('H:i:s'), $redact($e->getMessage()));
             $transcript[] = $errLine;
             $send([
                 'type'    => 'error',
-                'message' => $e->getMessage(),
+                'message' => $redact($e->getMessage()),
             ]);
         } finally {
             if ($ssh instanceof SSH2 && $ssh->isConnected()) {
@@ -642,7 +686,7 @@ final class SshRunner
             $this->formatDuration($totalDurationMs)
         );
         $transcript[] = $summaryLine;
-        $fullTranscript = implode("\n", $transcript);
+        $fullTranscript = $redact(implode("\n", $transcript));
 
         $this->logger->finalize($eventId, [
             'status'      => $overallStatus,
@@ -652,6 +696,17 @@ final class SshRunner
             'exit_code'   => $finalExitCode,
             'duration_ms' => $totalDurationMs,
         ]);
+
+        if ($mode === 'deploy_all' && $this->notifier !== null) {
+            $this->notifier->notifyDeployResult(
+                $project,
+                $overallStatus,
+                $finalTitle,
+                $totalDurationMs,
+                $finalExitCode,
+                ['trigger' => $trigger]
+            );
+        }
 
         $finalPayload = [
             'type'        => 'complete',
@@ -732,22 +787,42 @@ final class SshRunner
         ];
     }
 
+    /**
+     * @param array<string, string> $envVars
+     */
     private function wrapRemoteCommand(
         string $command,
         string $remotePath,
         string $branch,
         string $environment,
-        bool $stopOnError
+        bool $stopOnError,
+        array $envVars = []
     ): string {
         // Normalize CRLF -> LF so Linux/macOS shells never encounter stray \r characters
         $clean = str_replace(["\r\n", "\r"], "\n", trim($command));
 
+        // Expand {{VAR}} placeholders with project variables (and built-ins)
+        $replacements = [
+            '{{DEPLOY_BRANCH}}' => $branch,
+            '{{DEPLOY_ENV}}'    => $environment,
+            '{{REMOTE_PATH}}'   => $remotePath,
+        ];
+        foreach ($envVars as $k => $v) {
+            $replacements['{{' . $k . '}}'] = $v;
+        }
+        $clean = strtr($clean, $replacements);
+
         $lines = [];
-        $lines[] = sprintf(
-            'export DEPLOY_BRANCH=%s DEPLOY_ENV=%s',
-            $this->posixQuote($branch),
-            $this->posixQuote($environment)
-        );
+        $exports = [
+            'DEPLOY_BRANCH=' . $this->posixQuote($branch),
+            'DEPLOY_ENV=' . $this->posixQuote($environment),
+        ];
+        foreach ($envVars as $k => $v) {
+            if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', (string) $k)) {
+                $exports[] = $k . '=' . $this->posixQuote((string) $v);
+            }
+        }
+        $lines[] = 'export ' . implode(' ', $exports);
 
         if ($remotePath !== '') {
             $cdTarget = $this->buildCdTarget($remotePath);
@@ -1652,38 +1727,61 @@ BASH;
     ): ?array {
         $timestamp = date('Ymd_His');
         $cdTarget = $this->buildCdTarget($basePath);
-        $repoBranch = escapeshellarg($project['repo_branch'] ?: 'main');
+        $branchRaw = (string) ($project['repo_branch'] ?: 'main');
+        $repoBranch = $this->posixQuote($branchRaw);
 
-        $msg = sprintf("[%s] [ATOMIC] Preparing zero-downtime release: releases/%s", date('H:i:s'), $timestamp);
+        $sharedDirs = $this->parseSharedEntries((string) ($project['shared_dirs'] ?? 'storage'));
+        $sharedFiles = $this->parseSharedEntries((string) ($project['shared_files'] ?? '.env'));
+
+        $msg = sprintf("[%s] [ATOMIC] Preparing zero-downtime release: releases/%s (fetching %s)", date('H:i:s'), $timestamp, $branchRaw);
         $transcript[] = $msg;
         $send(['type' => 'chunk', 'step_number' => 0, 'data' => $msg . "\n"]);
 
-        $script = <<<BASH
-cd {$cdTarget} || exit 1
-mkdir -p releases/{$timestamp} shared/storage shared/bootstrap/cache || exit 2
+        $lines = [
+            "cd {$cdTarget} || exit 1",
+            "mkdir -p releases/{$timestamp} shared || exit 2",
+            "if [ -d \".git\" ]; then",
+            "    git fetch --prune origin {$repoBranch} 2>/dev/null || true",
+            "    REF={$repoBranch}; git rev-parse --verify origin/{$branchRaw} >/dev/null 2>&1 && REF=" . $this->posixQuote("origin/{$branchRaw}"),
+            "    git archive \"\$REF\" | tar -x -C \"releases/{$timestamp}\" || exit 3",
+            "elif [ -d \"current/.git\" ]; then",
+            "    (cd current && git fetch --prune origin {$repoBranch} 2>/dev/null || true)",
+            "    REF={$repoBranch}; (cd current && git rev-parse --verify origin/{$branchRaw} >/dev/null 2>&1) && REF=" . $this->posixQuote("origin/{$branchRaw}"),
+            "    (cd current && git archive \"\$REF\" | tar -x -C \"../releases/{$timestamp}\") || exit 3",
+            "fi",
+        ];
 
-if [ ! -f "shared/.env" ]; then
-    if [ -f ".env" ]; then
-        cp .env shared/.env
-    elif [ -f "current/.env" ]; then
-        cp current/.env shared/.env
-    fi
-fi
+        foreach ($sharedDirs as $dir) {
+            $qDir = $this->posixQuote($dir);
+            $qRelDir = $this->posixQuote("releases/{$timestamp}/{$dir}");
+            $qSharedDir = $this->posixQuote("shared/{$dir}");
+            $qCurDir = $this->posixQuote("current/{$dir}");
+            $upPrefix = str_repeat('../', 2 + substr_count($dir, '/'));
+            $qLinkTarget = $this->posixQuote($upPrefix . "shared/{$dir}");
 
-if [ -d ".git" ]; then
-    git archive {$repoBranch} | tar -x -C "releases/{$timestamp}" || exit 3
-elif [ -d "current/.git" ]; then
-    (cd current && git archive {$repoBranch} | tar -x -C "../releases/{$timestamp}") || exit 3
-fi
+            $lines[] = "mkdir -p {$qSharedDir}";
+            $lines[] = "if [ -z \"\$(ls -A {$qSharedDir} 2>/dev/null)\" ]; then if [ -d {$qDir} ] && [ ! -L {$qDir} ]; then cp -a {$qDir}/. {$qSharedDir}/ 2>/dev/null || true; elif [ -d {$qCurDir} ] && [ ! -L {$qCurDir} ]; then cp -a {$qCurDir}/. {$qSharedDir}/ 2>/dev/null || true; fi; fi";
+            $lines[] = "mkdir -p \"\$(dirname {$qRelDir})\"";
+            $lines[] = "rm -rf {$qRelDir}";
+            $lines[] = "ln -sfn {$qLinkTarget} {$qRelDir}";
+        }
 
-rm -rf "releases/{$timestamp}/storage"
-ln -sfn "../../shared/storage" "releases/{$timestamp}/storage"
+        foreach ($sharedFiles as $file) {
+            $qFile = $this->posixQuote($file);
+            $qRelFile = $this->posixQuote("releases/{$timestamp}/{$file}");
+            $qSharedFile = $this->posixQuote("shared/{$file}");
+            $qCurFile = $this->posixQuote("current/{$file}");
+            $upPrefix = str_repeat('../', 2 + substr_count($file, '/'));
+            $qLinkTarget = $this->posixQuote($upPrefix . "shared/{$file}");
 
-rm -f "releases/{$timestamp}/.env"
-ln -sfn "../../shared/.env" "releases/{$timestamp}/.env"
+            $lines[] = "mkdir -p \"\$(dirname {$qSharedFile})\" \"\$(dirname {$qRelFile})\"";
+            $lines[] = "if [ ! -f {$qSharedFile} ]; then if [ -f {$qFile} ] && [ ! -L {$qFile} ]; then cp {$qFile} {$qSharedFile}; elif [ -f {$qCurFile} ] && [ ! -L {$qCurFile} ]; then cp {$qCurFile} {$qSharedFile}; else touch {$qSharedFile}; fi; fi";
+            $lines[] = "rm -f {$qRelFile}";
+            $lines[] = "ln -sfn {$qLinkTarget} {$qRelFile}";
+        }
 
-echo "RELEASE_PREPARED:releases/{$timestamp}"
-BASH;
+        $lines[] = "echo \"RELEASE_PREPARED:releases/{$timestamp}\"";
+        $script = implode("\n", $lines);
 
         $out = trim((string) $ssh->exec($this->cleanScript($script)));
         if (!str_contains($out, 'RELEASE_PREPARED')) {
@@ -1698,6 +1796,30 @@ BASH;
             'timestamp'    => $timestamp,
             'release_dir'  => rtrim($basePath, '/\\') . "/releases/{$timestamp}",
         ];
+    }
+
+    /**
+     * Parses comma- or newline-separated relative directory/file paths, rejecting unsafe traversal.
+     *
+     * @return list<string>
+     */
+    private function parseSharedEntries(string $raw): array
+    {
+        $items = preg_split('/[\r\n,]+/', $raw) ?: [];
+        $clean = [];
+        foreach ($items as $item) {
+            $path = trim(str_replace('\\', '/', $item), " \t/");
+            if ($path === '' || str_starts_with($path, '~') || str_contains($path, '..')) {
+                continue;
+            }
+            if (!preg_match('/^[A-Za-z0-9._\/-]+$/', $path)) {
+                continue;
+            }
+            if (!in_array($path, $clean, true)) {
+                $clean[] = $path;
+            }
+        }
+        return $clean;
     }
 
     private function activateSymlinkRelease(
