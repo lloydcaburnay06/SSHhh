@@ -37,6 +37,12 @@ final class AccessGuard
         $scriptName = basename((string) ($_SERVER['SCRIPT_NAME'] ?? ''));
         $isApi = ($scriptName === 'api.php');
 
+        // Error-alert decisions from a push notification or the alert page. They carry a
+        // single-alert random token (checked in ErrorAlertManager) instead of a session.
+        if (($isApi && (string) ($_GET['action'] ?? '') === 'alert_action') || $scriptName === 'alert.php') {
+            return;
+        }
+
         // Git push webhooks carry no session/cookie; they authenticate with the
         // per-project webhook token checked in api.php instead.
         if ($isApi && (string) ($_GET['action'] ?? $_POST['action'] ?? '') === 'webhook') {

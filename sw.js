@@ -1,4 +1,4 @@
-const CACHE_NAME = 'sshhh-pwa-v1.6.1';
+const CACHE_NAME = 'sshhh-pwa-v1.7.0';
 const PRECACHE_ASSETS = [
     './offline.html',
     './manifest.webmanifest',
@@ -43,7 +43,7 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
-    if (url.pathname.endsWith('/api.php') || url.searchParams.has('logout')) {
+    if (url.pathname.endsWith('/api.php') || url.pathname.endsWith('/alert.php') || url.searchParams.has('logout')) {
         return;
     }
 
@@ -78,3 +78,62 @@ self.addEventListener('fetch', (event) => {
     }
 });
 
+
+// ---------------------------------------------------------------------------
+// Push notifications: error alerts with Proceed / Ignore
+// ---------------------------------------------------------------------------
+self.addEventListener('push', (event) => {
+    let data = {};
+    try {
+        data = event.data ? event.data.json() : {};
+    } catch (e) {
+        data = { title: 'SSHhh', body: event.data ? event.data.text() : '' };
+    }
+    const options = {
+        body: data.body || '',
+        tag: data.tag || 'sshhh',
+        renotify: true,
+        requireInteraction: !!data.requireInteraction,
+        icon: './assets/img/icon-192.png',
+        badge: './assets/img/favicon-32.png',
+        data: { url: data.url || './', token: data.token || null },
+        actions: Array.isArray(data.actions) ? data.actions : []
+    };
+    event.waitUntil(self.registration.showNotification(data.title || 'SSHhh', options));
+});
+
+self.addEventListener('notificationclick', (event) => {
+    const n = event.notification;
+    const d = n.data || {};
+    n.close();
+
+    if ((event.action === 'proceed' || event.action === 'ignore') && d.token) {
+        event.waitUntil(
+            fetch(new URL('api.php?action=alert_action', self.registration.scope), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token: d.token, choice: event.action, via: 'push' })
+            })
+                .then((res) => res.json())
+                .then((r) => self.registration.showNotification(
+                    event.action === 'proceed' ? (r.ok ? '🤖 Sent to Claude Code' : '❌ Could not send to Claude') : 'Alert ignored',
+                    { body: r.message || r.error || '', tag: n.tag, icon: './assets/img/icon-192.png', data: { url: r.session_url || d.url } }
+                ))
+                .catch(() => self.registration.showNotification('Could not reach SSHhh', {
+                    body: 'Open the alert to choose again.', tag: n.tag, data: { url: d.url }
+                }))
+        );
+        return;
+    }
+
+    // Tapping the notification body opens the alert page (also the fallback where action buttons are not shown, e.g. iPhone)
+    const target = new URL(d.url || './', self.registration.scope).href;
+    event.waitUntil(
+        self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((wins) => {
+            for (const w of wins) {
+                if (w.url === target && 'focus' in w) return w.focus();
+            }
+            return self.clients.openWindow(target);
+        })
+    );
+});

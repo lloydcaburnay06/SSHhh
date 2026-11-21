@@ -56,9 +56,13 @@ final class ClaudeLogSender
     /**
      * One automatic check. Never throws for "nothing to do"; returns what happened.
      *
-     * @return array{action: string, message: string, session_url?: string}
+     * With $escalate (error escalation on) new errors are NOT sent: the result has action
+     * "alert" with the new issues so ErrorAlertManager can ask the user first.
+     *
+     * @param array<string, int> $suppress extra issue hashes to treat as already handled (alerted/ignored)
+     * @return array{action: string, message: string, session_url?: string, file?: string, issues?: list<array<string, mixed>>}
      */
-    public function check(int $projectId): array
+    public function check(int $projectId, array $suppress = [], bool $escalate = false): array
     {
         $link = $this->links->getInternal($projectId);
         if ($link === null) {
@@ -84,6 +88,19 @@ final class ClaudeLogSender
 
         if (trim($snap['content']) === '') {
             return $this->watchResult($projectId, 'clean', 'Log is empty.');
+        }
+
+        if ($escalate) {
+            $digest = LaravelLogDigest::build($snap['content'], [], ClaudeRoutineClient::MAX_TEXT - 4000, 30, $this->links->recentIssues($projectId) + $suppress);
+            $new = array_values(array_filter(
+                $digest['issues'],
+                static fn(array $i): bool => !$i['known'] && LaravelLogDigest::isErrorLevel($i['level'])
+            ));
+            if ($new === []) {
+                return $this->watchResult($projectId, 'clean', 'No new errors (only info/warnings, or errors already reported/alerted in the last 24h).');
+            }
+            $this->watchResult($projectId, 'alert', count($new) . ' new error(s) found; asking you first (push → SMS → Claude).');
+            return ['action' => 'alert', 'message' => count($new) . ' new error(s)', 'file' => $snap['file'], 'issues' => $new];
         }
 
         $result = $this->deliver($projectId, $link, $snap, true);

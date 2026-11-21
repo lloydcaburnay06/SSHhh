@@ -150,6 +150,29 @@ On Windows, double-click **`cli\install_log_watch_task.bat`** once. It creates t
 
 ---
 
+## Error Escalation: Push → SMS → Claude Code
+
+With **Settings → 📟 Error Escalation → "Ask me before sending new errors to Claude Code"** turned on, the automatic checker does not send new errors straight to Claude. It asks you first:
+
+1. **New error found** → a **push notification** on your phone with **🤖 Proceed** and **Ignore** buttons. The text is a plain SMS-style summary of 160 characters or less, written by **Gemini** (free tier) or by SSHhh itself when no Gemini key is set or Gemini fails.
+2. **No answer within 10 minutes** → the same summary is sent by **SMS (PhilSMS)**. The SMS is only an alert; decide with the notification or in SSHhh. SMS is only ever sent for errors.
+3. **Still no answer 10 minutes after the SMS** → the log is **sent to Claude Code automatically**.
+
+**Ignore** stops the same errors from alerting again for 24 hours. Tapping the notification itself opens an alert page with the same two buttons, which is how it works on iPhone, where notification buttons aren't shown. Only one alert is open per project at a time. Anything newer is included when that alert is sent.
+
+**Privacy:** only the masked one-line error message and its `File.php:line` go to Gemini, never stack traces or the full log. On the free tier, Google may use and review what is sent.
+
+### Setup
+
+1. **Get your phone to SSHhh over HTTPS.** Browsers only allow push notifications on HTTPS sites. A Cloudflare Tunnel is free and needs no open ports. Install `cloudflared` on this PC, run `cloudflared tunnel login`, then create a tunnel that points a hostname such as `deployer.yourdomain.com` at `http://localhost:80` (or `http://localhost:8090` if you serve SSHhh on its own port). Open that address on your phone and sign in with Google Authenticator. On iPhone, tap Share → **Add to Home Screen** and open SSHhh from the icon, since iOS only allows push for installed web apps.
+2. **Turn on notifications:** on the phone, open **Settings → 📟 Error Escalation → 🔔 Turn on notifications on this device**, then **Send test notification**.
+3. **Gemini (optional):** create a free API key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey) and paste it in. **Preview a summary** shows an example SMS.
+4. **PhilSMS:** paste your API token, your approved **Sender ID**, and your mobile number, then **Send test SMS**.
+5. Tick **Ask me before sending new errors to Claude Code** and **Save**.
+6. **Re-run `cli\install_log_watch_task.bat`**: the task now runs every minute so the 10-minute timers are on time. Logs are still checked every 10 minutes per project.
+
+---
+
 ## Web Server Security Notes
 
 ### Apache

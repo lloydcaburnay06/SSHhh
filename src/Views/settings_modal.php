@@ -15,6 +15,7 @@
         <div class="settings-tabs-bar" role="tablist">
             <button type="button" class="settings-tab-btn active" data-settings-tab="profiles" role="tab" aria-selected="true">🖥️ Shared SSH Profiles</button>
             <button type="button" class="settings-tab-btn" data-settings-tab="notifications" role="tab" aria-selected="false">🔔 Outbound Alerts</button>
+            <button type="button" class="settings-tab-btn" data-settings-tab="alerts" role="tab" aria-selected="false">📟 Error Escalation</button>
             <button type="button" class="settings-tab-btn" data-settings-tab="vault" role="tab" aria-selected="false">🛡️ Vault Backup &amp; Restore</button>
         </div>
 
@@ -148,6 +149,76 @@
                         <button type="button" class="btn btn-secondary btn-sm" id="testNotificationBtn">🔔 Send Test Alert</button>
                         <button type="submit" class="btn btn-primary btn-sm" id="saveNotificationsBtn">Save Notification Settings</button>
                     </div>
+                </form>
+            </div>
+
+            <!-- Tab: Error escalation (push → SMS → Claude Code) -->
+            <div class="settings-tab-pane" id="settingsPaneAlerts" style="display:none;">
+                <form id="alertSettingsForm" autocomplete="off">
+                    <div style="padding:12px 14px; background:var(--bg-elevated); border:1px solid var(--border-color); border-radius:8px; margin-bottom:12px;">
+                        <label class="toggle-label" for="alert_enabled" style="color:var(--text-primary); font-weight:600; margin:0;">
+                            <input type="checkbox" id="alert_enabled">
+                            <span>Ask me before sending new errors to Claude Code</span>
+                        </label>
+                        <p class="form-hint" style="margin:6px 0 0;">
+                            When the automatic checker finds a new error: <strong>push notification</strong> (Proceed / Ignore) →
+                            no answer in <input type="number" id="alert_push_wait_min" min="1" max="120" value="10" style="width:52px;"> min → <strong>SMS alert</strong> →
+                            no answer <input type="number" id="alert_sms_wait_min" min="1" max="120" value="10" style="width:52px;"> min after the SMS → <strong>sent to Claude Code</strong>.
+                            Turn this off to send new errors to Claude right away.
+                        </p>
+                    </div>
+
+                    <h4 style="margin:14px 0 6px; font-size:13.5px;">📱 Push notifications</h4>
+                    <div id="alertPushInsecure" class="form-hint" style="display:none; color:#fca5a5; margin-bottom:6px;">
+                        This page is not open over HTTPS, so browsers on other devices can't turn on notifications here. Open SSHhh through your HTTPS tunnel address on your phone (see README).
+                    </div>
+                    <div id="alertDevicesList" style="font-size:12.5px; margin-bottom:8px;"></div>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:6px;">
+                        <button type="button" class="btn btn-primary btn-sm" id="alertEnablePushBtn">🔔 Turn on notifications on this device</button>
+                        <button type="button" class="btn btn-secondary btn-sm" id="alertTestPushBtn">Send test notification</button>
+                    </div>
+
+                    <h4 style="margin:16px 0 6px; font-size:13.5px;">✨ Gemini summary (free tier)</h4>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="alert_gemini_key"><span>Gemini API key</span> <span id="alertGeminiSaved" class="secret-saved-hint" style="display:none;">&#128274; Stored</span></label>
+                            <input type="password" class="form-control" id="alert_gemini_key" autocomplete="new-password" placeholder="From aistudio.google.com/apikey">
+                        </div>
+                        <div class="form-group">
+                            <label for="alert_gemini_model">Model</label>
+                            <input type="text" class="form-control" id="alert_gemini_model" placeholder="gemini-flash-latest">
+                        </div>
+                    </div>
+                    <span class="form-hint">Only the masked one-line headline of each error is sent to Gemini, never stack traces. On the free tier Google may use and review what you send. Without a key, SSHhh writes the summary itself.</span>
+                    <div style="margin-top:6px;"><button type="button" class="btn btn-secondary btn-sm" id="alertTestSummaryBtn">Preview a summary</button> <span id="alertSummaryPreview" style="font-size:12px; color:var(--text-secondary);"></span></div>
+
+                    <h4 style="margin:16px 0 6px; font-size:13.5px;">💬 SMS alert (PhilSMS)</h4>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="alert_philsms_token"><span>PhilSMS API token</span> <span id="alertSmsSaved" class="secret-saved-hint" style="display:none;">&#128274; Stored</span></label>
+                            <input type="password" class="form-control" id="alert_philsms_token" autocomplete="new-password" placeholder="From dashboard.philsms.com → Developers">
+                        </div>
+                        <div class="form-group">
+                            <label for="alert_philsms_sender">Sender ID</label>
+                            <input type="text" class="form-control" id="alert_philsms_sender" maxlength="15" placeholder="Your approved sender name">
+                        </div>
+                        <div class="form-group">
+                            <label for="alert_philsms_to">Your mobile number</label>
+                            <input type="tel" class="form-control" id="alert_philsms_to" placeholder="09171234567">
+                        </div>
+                    </div>
+                    <span class="form-hint">The SMS is an alert only: decide with the notification or in SSHhh. SMS is sent only when an error was found.</span>
+
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:14px; gap:8px; flex-wrap:wrap;">
+                        <span style="display:flex; gap:8px;">
+                            <button type="button" class="btn btn-secondary btn-sm" id="alertCheckSmsBtn">🔑 Check token</button>
+                            <button type="button" class="btn btn-secondary btn-sm" id="alertTestSmsBtn">💬 Send test SMS</button>
+                        </span>
+                        <button type="submit" class="btn btn-primary btn-sm" id="alertSaveBtn">Save escalation settings</button>
+                    </div>
+
+                    <h4 style="margin:18px 0 6px; font-size:13.5px;">Recent alerts</h4>
+                    <div id="alertRecentList" style="font-size:12px;"></div>
                 </form>
             </div>
 

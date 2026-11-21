@@ -99,6 +99,21 @@ try {
         ]);
     }
 
+    // Proceed / Ignore from a push notification or alert.php (token-authenticated, no session)
+    if ($action === 'alert_action') {
+        if ($method !== 'POST') {
+            respondJson(['ok' => false, 'error' => 'Method not allowed.'], 405);
+        }
+        $in = readJsonBody();
+        $app->releaseSessionLock();
+        $via = in_array(($in['via'] ?? ''), ['push', 'page'], true) ? (string) $in['via'] : 'push';
+        try {
+            respondJson($app->alerts()->decide((string) ($in['token'] ?? ''), (string) ($in['choice'] ?? ''), $via));
+        } catch (Throwable $e) {
+            respondJson(['ok' => false, 'error' => $e->getMessage()], 400);
+        }
+    }
+
     // Read-only GET endpoints
     if ($method === 'GET') {
         switch ($action) {
@@ -545,6 +560,45 @@ try {
             $lines = isset($body['lines']) ? (int) $body['lines'] : 300;
             $logData = $app->runner()->getRemoteLogs($projectId, $file, $lines);
             respondJson(['ok' => true, 'result' => $logData]);
+
+        case 'get_alert_settings':
+            respondJson(['ok' => true, 'result' => [
+                'config'     => $app->alertChannels()->configPublic(),
+                'vapid_key'  => $app->webPush()->publicKey(),
+                'devices'    => $app->webPush()->listDevices(),
+                'alerts'     => $app->alerts()->recent(10),
+                'secure'     => (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https'),
+            ]]);
+
+        case 'save_alert_settings':
+            $cfg = $app->alertChannels()->save($body);
+            $app->logger()->log(['category' => 'audit', 'event_type' => 'alert_settings_updated', 'status' => 'info', 'title' => 'Updated error escalation settings']);
+            respondJson(['ok' => true, 'result' => ['config' => $cfg]]);
+
+        case 'push_subscribe':
+            $app->webPush()->saveSubscription((array) ($body['subscription'] ?? []), (string) ($_SERVER['HTTP_USER_AGENT'] ?? ''));
+            respondJson(['ok' => true, 'result' => ['devices' => $app->webPush()->listDevices()]]);
+
+        case 'push_remove_device':
+            $app->webPush()->removeDevice((int) ($body['id'] ?? 0));
+            respondJson(['ok' => true, 'result' => ['devices' => $app->webPush()->listDevices()]]);
+
+        case 'test_push':
+            respondJson(['ok' => true, 'result' => ['message' => $app->alerts()->sendTestPush()]]);
+
+        case 'check_sms_token':
+            respondJson(['ok' => true, 'result' => ['message' => $app->alertChannels()->checkSmsToken()]]);
+
+        case 'test_sms':
+            $msg = $app->alertChannels()->sendSms('SSHhh test: SMS alerts work. You will get these only when a new Laravel error is found.');
+            respondJson(['ok' => true, 'result' => ['message' => $msg]]);
+
+        case 'test_summary':
+            $s = $app->alertChannels()->summarize('Bansay', [
+                '[2026-11-21 10:00:00] production.ERROR: Undefined array key "total" at /home/u/app/Http/Controllers/OrderController.php:42',
+                '[2026-11-21 10:02:00] production.CRITICAL: SQLSTATE[HY000] [2002] Connection refused',
+            ], 2);
+            respondJson(['ok' => true, 'result' => $s + ['length' => strlen($s['text'])]]);
 
         case 'get_claude_link':
         case 'save_claude_link':

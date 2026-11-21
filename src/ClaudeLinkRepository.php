@@ -182,6 +182,15 @@ final class ClaudeLinkRepository
             ->execute([':j' => json_encode($map), ':id' => $projectId]);
     }
 
+    /** True when the log has not been checked in the last $minutes minutes (compared in MySQL). */
+    public function isDueForCheck(int $projectId, int $minutes): bool
+    {
+        $this->ensureTable();
+        $stmt = $this->pdo->prepare('SELECT `last_watch_at` IS NULL OR TIMESTAMPDIFF(SECOND, `last_watch_at`, NOW()) >= :s FROM `project_claude_links` WHERE `project_id` = :id');
+        $stmt->execute([':s' => max(1, $minutes) * 60 - 20, ':id' => $projectId]);
+        return (bool) $stmt->fetchColumn();
+    }
+
     public function recordWatch(int $projectId, string $result): void
     {
         $this->ensureTable();

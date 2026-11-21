@@ -30,7 +30,7 @@ final class LaravelLogDigest
     /**
      * @param array<string, string> $meta Header lines (label => value) shown above the issues.
      * @param array<string, int> $known Issue hash => unix time it was last reported (marks repeats in the report).
-     * @return array{text: string, entries: int, groups: int, included: int, format: string, issues: list<array{hash: string, level: string, known: bool}>}
+     * @return array{text: string, entries: int, groups: int, included: int, format: string, issues: list<array{hash: string, level: string, known: bool, headline: string}>}
      */
     public static function build(string $raw, array $meta, int $maxChars = 60000, int $traceLines = 30, array $known = []): array
     {
@@ -54,7 +54,8 @@ final class LaravelLogDigest
                 }
             }
             $text = $header . "Format: raw (not Laravel-formatted)\n\n=== Raw log tail ===\n" . $body . "\n";
-            $issues = $body === '' ? [] : [['hash' => self::hash('raw|' . md5($body)), 'level' => 'ERROR', 'known' => false]];
+            $lastLine = (string) strrchr("\n" . $body, "\n");
+            $issues = $body === '' ? [] : [['hash' => self::hash('raw|' . md5($body)), 'level' => 'ERROR', 'known' => false, 'headline' => mb_substr(trim($lastLine), 0, 300)]];
             return ['text' => $text, 'entries' => 0, 'groups' => $body === '' ? 0 : 1, 'included' => $body === '' ? 0 : 1, 'format' => 'raw', 'issues' => $issues];
         }
 
@@ -111,7 +112,7 @@ final class LaravelLogDigest
             }
             $blocks .= $block;
             $included++;
-            $issues[] = ['hash' => $g['hash'], 'level' => $g['level'], 'known' => $isKnown];
+            $issues[] = ['hash' => $g['hash'], 'level' => $g['level'], 'known' => $isKnown, 'headline' => mb_substr((string) strtok($g['sample'], "\n"), 0, 300)];
         }
 
         $footer = $included < $total ? "\n(" . ($total - $included) . " lower-priority issues omitted to fit the size limit.)\n" : '';

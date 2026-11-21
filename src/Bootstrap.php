@@ -21,6 +21,9 @@ final class Bootstrap
     private VaultBackup $vault;
     private ?ClaudeLinkRepository $claudeLinks = null;
     private ?ClaudeLogSender $claudeSender = null;
+    private ?AlertChannels $alertChannels = null;
+    private ?WebPush $webPush = null;
+    private ?ErrorAlertManager $alerts = null;
 
     private function __construct()
     {
@@ -150,6 +153,27 @@ final class Bootstrap
             $this->projects,
             $this->claudeLinks(),
             new ClaudeRoutineClient(),
+            $this->logger
+        );
+    }
+
+    public function alertChannels(): AlertChannels
+    {
+        return $this->alertChannels ??= new AlertChannels($this->settings);
+    }
+
+    public function webPush(): WebPush
+    {
+        return $this->webPush ??= new WebPush($this->database->pdo(), $this->settings);
+    }
+
+    public function alerts(): ErrorAlertManager
+    {
+        return $this->alerts ??= new ErrorAlertManager(
+            $this->database->pdo(),
+            $this->alertChannels(),
+            $this->webPush(),
+            $this->claudeSender(),
             $this->logger
         );
     }

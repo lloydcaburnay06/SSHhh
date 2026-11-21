@@ -2274,6 +2274,7 @@
         const panes = {
             profiles: document.getElementById('settingsPaneProfiles'),
             notifications: document.getElementById('settingsPaneNotifications'),
+            alerts: document.getElementById('settingsPaneAlerts'),
             vault: document.getElementById('settingsPaneVault')
         };
 
@@ -2319,6 +2320,151 @@
             });
             if (tabKey === 'profiles') loadProfiles();
             if (tabKey === 'notifications') loadNotifications();
+            if (tabKey === 'alerts') loadAlertSettings();
+        }
+
+        // ---------------- Error escalation (push → SMS → Claude Code) ----------------
+        const alertForm = document.getElementById('alertSettingsForm');
+        const $a = (id) => document.getElementById(id);
+        let alertVapidKey = '';
+
+        function urlB64ToUint8Array(b64) {
+            const pad = '='.repeat((4 - (b64.length % 4)) % 4);
+            const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+            return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
+        }
+
+        function renderAlertDevices(devices) {
+            const el = $a('alertDevicesList');
+            if (!el) return;
+            if (!devices || devices.length === 0) {
+                el.innerHTML = '<span style="color:var(--text-muted);">No devices have notifications turned on yet.</span>';
+                return;
+            }
+            el.innerHTML = devices.map((d) => `<div style="display:flex; justify-content:space-between; gap:8px; padding:4px 0; border-bottom:1px solid var(--border-subtle);">
+                <span>📱 ${escapeHtml(d.device)} <span style="color:var(--text-muted);">since ${escapeHtml(d.created_at)}${d.last_ok_at ? ' · last delivered ' + escapeHtml(d.last_ok_at) : ''}</span></span>
+                <button type="button" class="btn btn-ghost btn-xs" data-remove-device="${d.id}">Remove</button></div>`).join('');
+        }
+
+        function renderAlertRecent(alerts) {
+            const el = $a('alertRecentList');
+            if (!el) return;
+            if (!alerts || alerts.length === 0) {
+                el.innerHTML = '<span style="color:var(--text-muted);">No alerts yet.</span>';
+                return;
+            }
+            const label = { pending: '⏳ waiting', processing: '⏳ sending', proceeded: '🤖 proceeded', auto_sent: '🤖 auto-sent', ignored: '🙈 ignored', failed: '❌ failed', expired: '⌛ expired' };
+            el.innerHTML = alerts.map((a) => `<div style="padding:5px 0; border-bottom:1px solid var(--border-subtle);">
+                <strong>${escapeHtml(a.project_name)}</strong> · ${escapeHtml(a.created_at)} · ${label[a.status] || escapeHtml(a.status)}
+                ${a.session_url ? ` · <a href="${escapeHtml(a.session_url)}" target="_blank" rel="noopener">session</a>` : ''}
+                <div style="color:var(--text-secondary);">${escapeHtml(a.summary)}</div>
+                <div style="color:var(--text-muted);">${escapeHtml(a.push_result || '')}${a.sms_result ? ' · ' + escapeHtml(a.sms_result) : ''}${a.error ? ' · ' + escapeHtml(a.error) : ''}</div></div>`).join('');
+        }
+
+        async function loadAlertSettings() {
+            if (!alertForm) return;
+            try {
+                const res = await apiPost('get_alert_settings', {});
+                const r = res.result;
+                const c = r.config;
+                alertVapidKey = r.vapid_key;
+                $a('alert_enabled').checked = !!c.enabled;
+                $a('alert_push_wait_min').value = c.push_wait_min;
+                $a('alert_sms_wait_min').value = c.sms_wait_min;
+                $a('alert_gemini_model').value = c.gemini_model || '';
+                $a('alert_gemini_key').value = '';
+                $a('alertGeminiSaved').style.display = c.has_gemini_key ? '' : 'none';
+                $a('alert_philsms_token').value = '';
+                $a('alertSmsSaved').style.display = c.has_philsms_token ? '' : 'none';
+                $a('alert_philsms_sender').value = c.philsms_sender || '';
+                $a('alert_philsms_to').value = c.philsms_to || '';
+                const secureOk = window.isSecureContext;
+                $a('alertPushInsecure').style.display = secureOk ? 'none' : 'block';
+                $a('alertEnablePushBtn').disabled = !secureOk || !('PushManager' in window);
+                renderAlertDevices(r.devices);
+                renderAlertRecent(r.alerts);
+            } catch (err) {
+                toast('Could not load escalation settings: ' + err.message, 'error');
+            }
+        }
+
+        if (alertForm) {
+            alertForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const btn = $a('alertSaveBtn');
+                btn.disabled = true;
+                try {
+                    await apiPost('save_alert_settings', {
+                        enabled: $a('alert_enabled').checked,
+                        push_wait_min: parseInt($a('alert_push_wait_min').value, 10) || 10,
+                        sms_wait_min: parseInt($a('alert_sms_wait_min').value, 10) || 10,
+                        gemini_key: $a('alert_gemini_key').value.trim(),
+                        gemini_model: $a('alert_gemini_model').value.trim(),
+                        philsms_token: $a('alert_philsms_token').value.trim(),
+                        philsms_sender: $a('alert_philsms_sender').value.trim(),
+                        philsms_to: $a('alert_philsms_to').value.trim()
+                    });
+                    toast('Escalation settings saved.', 'success');
+                    await loadAlertSettings();
+                } catch (err) {
+                    toast(err.message, 'error');
+                } finally {
+                    btn.disabled = false;
+                }
+            });
+
+            $a('alertEnablePushBtn').addEventListener('click', async () => {
+                try {
+                    if (!('serviceWorker' in navigator) || !('PushManager' in window)) throw new Error('This browser does not support push notifications. On iPhone, add SSHhh to the Home Screen first.');
+                    const perm = await Notification.requestPermission();
+                    if (perm !== 'granted') throw new Error('Notifications are blocked for this site in the browser settings.');
+                    const reg = await navigator.serviceWorker.ready;
+                    let sub = await reg.pushManager.getSubscription();
+                    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToUint8Array(alertVapidKey) });
+                    const res = await apiPost('push_subscribe', { subscription: sub.toJSON() });
+                    renderAlertDevices(res.result.devices);
+                    toast('Notifications are on for this device.', 'success');
+                } catch (err) {
+                    toast(err.message, 'error');
+                }
+            });
+
+            $a('alertDevicesList').addEventListener('click', async (e) => {
+                const id = e.target && e.target.dataset ? e.target.dataset.removeDevice : null;
+                if (!id) return;
+                try {
+                    const res = await apiPost('push_remove_device', { id: parseInt(id, 10) });
+                    renderAlertDevices(res.result.devices);
+                } catch (err) { toast(err.message, 'error'); }
+            });
+
+            const simple = (btnId, action, okPrefix) => {
+                $a(btnId).addEventListener('click', async () => {
+                    const b = $a(btnId);
+                    b.disabled = true;
+                    try {
+                        const res = await apiPost(action, {});
+                        toast((okPrefix ? okPrefix + ' ' : '') + (res.result.message || 'Done.'), 'success');
+                    } catch (err) {
+                        toast(err.message, 'error');
+                    } finally { b.disabled = false; }
+                });
+            };
+            simple('alertTestPushBtn', 'test_push', '');
+            simple('alertTestSmsBtn', 'test_sms', '');
+            simple('alertCheckSmsBtn', 'check_sms_token', '');
+
+            $a('alertTestSummaryBtn').addEventListener('click', async () => {
+                const out = $a('alertSummaryPreview');
+                out.textContent = 'Writing…';
+                try {
+                    const res = await apiPost('test_summary', {});
+                    const r = res.result;
+                    out.textContent = `"${r.text}" (${r.length}/160, ${r.source}${r.note ? ' — ' + r.note : ''})`;
+                } catch (err) {
+                    out.textContent = err.message;
+                }
+            });
         }
 
         tabBtns.forEach((btn) => {
