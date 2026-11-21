@@ -22,6 +22,7 @@
         "ext-pdo": "*",
         "ext-pdo_mysql": "*",
         "chillerlan/php-qrcode": "^6.0",
+        "composer/ca-bundle": "^1.5",
         "phpseclib/phpseclib": "^3.0"
     },
     "autoload": {

@@ -54,6 +54,55 @@
                         <button type="button" class="btn btn-ghost btn-xs" id="copyRemoteLogBtn" title="Copy displayed log text">📋 Copy</button>
                         <a href="#" class="btn btn-secondary btn-xs" id="downloadRemoteLogBtn" title="Download the full remote .log file directly">📥 Download .log</a>
                         <button type="button" class="btn btn-danger btn-xs" id="clearRemoteLogBtn" title="Truncate/empty this log file on the remote server">🗑️ Clear Log</button>
+                        <span style="width:1px; height:18px; background:var(--border-color); margin:0 2px;"></span>
+                        <button type="button" class="btn btn-ghost btn-xs" id="claudeLinkToggleBtn" title="Link this project to a Claude Code scheduled task">🔗 Claude link</button>
+                        <button type="button" class="btn btn-deploy btn-xs" id="sendLogToClaudeBtn" title="Send this log's errors to Claude Code to fix, then clear what was sent">🤖 Send to Claude</button>
+                    </div>
+                </div>
+
+                <!-- Claude Code link (per project) -->
+                <div id="claudeLinkPanel" style="display:none; margin-bottom:12px; padding:12px 14px; border:1px solid var(--border-color); border-radius:8px; background:rgba(255,255,255,0.03);">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                        <strong style="font-size:13px;">🔗 Claude Code link for this project</strong>
+                        <span id="claudeLinkStatus" style="font-size:11.5px; color:var(--text-muted);"></span>
+                    </div>
+                    <p style="font-size:11.5px; color:var(--text-secondary); margin:0 0 10px;">
+                        Create a scheduled task for this project's repository at
+                        <a href="https://claude.ai/code/routines" target="_blank" rel="noopener">claude.ai/code/routines</a>,
+                        paste the prompt below into it, add an <strong>API</strong> trigger, then copy its Fire URL and token here.
+                    </p>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+                        <label style="font-size:11.5px; color:var(--text-secondary);">Fire URL
+                            <input type="url" id="claudeFireUrlInput" class="form-control" placeholder="https://api.anthropic.com/v1/claude_code/routines/trig_…/fire" style="font-size:12px; padding:4px 8px; width:100%;">
+                        </label>
+                        <label style="font-size:11.5px; color:var(--text-secondary);">API token
+                            <input type="password" id="claudeTokenInput" class="form-control" placeholder="sk-ant-oat01-…" autocomplete="new-password" style="font-size:12px; padding:4px 8px; width:100%;">
+                        </label>
+                        <label style="font-size:11.5px; color:var(--text-secondary);">Merge fixes into branch
+                            <input type="text" id="claudeMergeBranchInput" class="form-control" placeholder="main" style="font-size:12px; padding:4px 8px; width:100%;">
+                        </label>
+                        <label style="font-size:11.5px; color:var(--text-secondary); display:flex; align-items:center; gap:6px; margin-top:16px;">
+                            <input type="checkbox" id="claudeClearAfterSendInput" checked>
+                            Clear sent lines from the log after Claude Code receives them
+                        </label>
+                        <label style="font-size:11.5px; color:var(--text-secondary);">Log file to check automatically
+                            <input type="text" id="claudeWatchFileInput" class="form-control" placeholder="storage/logs/laravel.log" style="font-size:12px; padding:4px 8px; width:100%;">
+                        </label>
+                        <label style="font-size:11.5px; color:var(--text-secondary); display:flex; align-items:center; gap:6px; margin-top:16px;" title="Used by cli/log_watch.php (Windows Task Scheduler, every 10 minutes)">
+                            <input type="checkbox" id="claudeAutoWatchInput">
+                            Check this log automatically and send new errors to Claude
+                        </label>
+                    </div>
+                    <div id="claudeWatchStatus" style="font-size:11.5px; color:var(--text-muted); margin-top:6px;"></div>
+                    <label style="display:block; font-size:11.5px; color:var(--text-secondary); margin-top:10px;">Prompt for the scheduled task
+                        <textarea id="claudePromptTemplate" readonly rows="6" class="form-control" style="width:100%; font-family:var(--font-mono); font-size:11px; padding:6px 8px; resize:vertical;"></textarea>
+                    </label>
+                    <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:8px; flex-wrap:wrap;">
+                        <button type="button" class="btn btn-ghost btn-xs" id="copyClaudePromptBtn">📋 Copy prompt</button>
+                        <div style="display:flex; gap:6px;">
+                            <button type="button" class="btn btn-ghost btn-xs" id="removeClaudeLinkBtn" style="display:none;">Remove link</button>
+                            <button type="button" class="btn btn-primary btn-xs" id="saveClaudeLinkBtn">Save link</button>
+                        </div>
                     </div>
                 </div>
 

@@ -2095,10 +2095,161 @@
             });
         }
 
+        // ---------------- Claude Code link & "Send to Claude" ----------------
+        const claudePanel = document.getElementById('claudeLinkPanel');
+        const claudeToggleBtn = document.getElementById('claudeLinkToggleBtn');
+        const sendToClaudeBtn = document.getElementById('sendLogToClaudeBtn');
+        const claudeFireUrl = document.getElementById('claudeFireUrlInput');
+        const claudeToken = document.getElementById('claudeTokenInput');
+        const claudeBranch = document.getElementById('claudeMergeBranchInput');
+        const claudeClear = document.getElementById('claudeClearAfterSendInput');
+        const claudeAutoWatch = document.getElementById('claudeAutoWatchInput');
+        const claudeWatchFile = document.getElementById('claudeWatchFileInput');
+        const claudeWatchStatus = document.getElementById('claudeWatchStatus');
+        const claudePrompt = document.getElementById('claudePromptTemplate');
+        const claudeStatus = document.getElementById('claudeLinkStatus');
+        const saveClaudeBtn = document.getElementById('saveClaudeLinkBtn');
+        const removeClaudeBtn = document.getElementById('removeClaudeLinkBtn');
+        const copyPromptBtn = document.getElementById('copyClaudePromptBtn');
+        let claudeLink = null;
+
+        function renderClaudeLink(link) {
+            claudeLink = link;
+            if (!claudePanel || !link) return;
+            claudeFireUrl.value = link.fire_url || '';
+            claudeToken.value = '';
+            claudeToken.placeholder = link.has_token ? '•••••••• saved (leave blank to keep)' : 'sk-ant-oat01-…';
+            claudeBranch.value = link.merge_branch || '';
+            claudeClear.checked = !!link.clear_after_send;
+            if (claudeAutoWatch) claudeAutoWatch.checked = !!link.auto_watch;
+            if (claudeWatchFile) claudeWatchFile.value = link.watch_file || '';
+            if (claudeWatchStatus) {
+                claudeWatchStatus.textContent = link.auto_watch
+                    ? (link.last_watch_at
+                        ? `Automatic check: last run ${link.last_watch_at} — ${link.last_watch_result || ''}`
+                        : 'Automatic check is on, but the checker has not run yet. Set up cli/log_watch.php in Windows Task Scheduler (see README).')
+                    : '';
+            }
+            claudePrompt.value = link.prompt_template || '';
+            removeClaudeBtn.style.display = link.configured ? '' : 'none';
+            let status = link.configured ? '✅ Linked' : 'Not linked yet';
+            if (link.last_sent_at) status += ` • last sent ${link.last_sent_at}`;
+            claudeStatus.innerHTML = escapeHtml(status) + (link.last_session_url
+                ? ` • <a href="${escapeHtml(link.last_session_url)}" target="_blank" rel="noopener">open last session</a>` : '');
+            if (sendToClaudeBtn) {
+                sendToClaudeBtn.title = link.configured
+                    ? "Send this log's errors to Claude Code to fix, then clear what was sent"
+                    : 'Link this project to Claude Code first (🔗 Claude link)';
+            }
+        }
+
+        async function loadClaudeLink(project) {
+            claudeLink = null;
+            if (claudePanel) claudePanel.style.display = 'none';
+            try {
+                const res = await apiPost('get_claude_link', { project_id: project.id });
+                if (currentProject && currentProject.id === project.id) renderClaudeLink(res.result);
+            } catch (err) {
+                // Non-fatal: log viewer still works without the Claude link
+            }
+        }
+
+        if (claudeToggleBtn && claudePanel) {
+            claudeToggleBtn.addEventListener('click', () => {
+                claudePanel.style.display = claudePanel.style.display === 'none' ? 'block' : 'none';
+            });
+        }
+
+        if (copyPromptBtn) {
+            copyPromptBtn.addEventListener('click', () => {
+                navigator.clipboard.writeText(claudePrompt.value).then(
+                    () => toast('Prompt copied. Paste it into the scheduled task.', 'info'),
+                    () => toast('Failed to copy to clipboard', 'error')
+                );
+            });
+        }
+
+        async function saveClaudeLink(remove = false) {
+            if (!currentProject) return;
+            const btn = remove ? removeClaudeBtn : saveClaudeBtn;
+            btn.disabled = true;
+            try {
+                const res = await apiPost('save_claude_link', {
+                    project_id: currentProject.id,
+                    fire_url: claudeFireUrl.value.trim(),
+                    token: claudeToken.value.trim(),
+                    merge_branch: claudeBranch.value.trim(),
+                    clear_after_send: claudeClear.checked,
+                    auto_watch: claudeAutoWatch ? claudeAutoWatch.checked : false,
+                    watch_file: claudeWatchFile ? claudeWatchFile.value.trim() : '',
+                    remove: remove
+                });
+                renderClaudeLink(res.result);
+                toast(remove ? 'Claude Code link removed.' : 'Claude Code link saved.', 'success');
+            } catch (err) {
+                toast(err.message, 'error');
+            } finally {
+                btn.disabled = false;
+            }
+        }
+        if (saveClaudeBtn) saveClaudeBtn.addEventListener('click', () => saveClaudeLink(false));
+        if (removeClaudeBtn) removeClaudeBtn.addEventListener('click', async () => {
+            const ok = await confirmAction({
+                title: 'Remove Claude Code link?',
+                message: 'The saved fire URL and token for this project will be deleted from SSHhh.',
+                confirmText: 'Remove',
+                confirmClass: 'btn-danger',
+                icon: '🔗',
+                iconVariant: 'danger'
+            });
+            if (ok) saveClaudeLink(true);
+        });
+
+        if (sendToClaudeBtn) {
+            sendToClaudeBtn.addEventListener('click', async () => {
+                if (!currentProject || !currentFile) return;
+                if (!claudeLink || !claudeLink.configured) {
+                    if (claudePanel) claudePanel.style.display = 'block';
+                    toast('Link this project to a Claude Code scheduled task first.', 'info');
+                    return;
+                }
+                const clearText = claudeLink.clear_after_send
+                    ? 'After Claude Code confirms it received the report, the sent lines are removed from the log (newer lines are kept).'
+                    : 'The log will be kept as is.';
+                const confirmed = await confirmAction({
+                    title: 'Send log to Claude Code?',
+                    subtitle: `${currentProject.name} — ${currentFile}`,
+                    message: `The errors in <strong>${escapeHtml(currentFile)}</strong> are grouped, secrets are masked, and the report starts this project's Claude Code task.<br><br>Claude will fix the bugs, run the tests and merge into <strong>${escapeHtml(claudeLink.merge_branch)}</strong> (or open a pull request if unsure).<br><br>${clearText}`,
+                    confirmText: 'Send to Claude',
+                    icon: '🤖',
+                    iconVariant: 'deploy'
+                });
+                if (!confirmed) return;
+
+                const orig = sendToClaudeBtn.textContent;
+                sendToClaudeBtn.disabled = true;
+                sendToClaudeBtn.textContent = 'Sending...';
+                try {
+                    const res = await apiPost('send_log_to_claude', { project_id: currentProject.id, file: currentFile });
+                    const r = res.result || {};
+                    toast(r.message || 'Sent to Claude Code.', 'success');
+                    if (r.session_url) window.open(r.session_url, '_blank', 'noopener');
+                    await loadClaudeLink(currentProject);
+                    await fetchLogs(currentProject, currentFile);
+                } catch (err) {
+                    toast('Send to Claude failed: ' + err.message, 'error');
+                } finally {
+                    sendToClaudeBtn.disabled = false;
+                    sendToClaudeBtn.textContent = orig;
+                }
+            });
+        }
+
         window.DeployerApp.openRemoteLogsModal = function (proj, preferredFile = null) {
             if (!proj || !proj.id) return;
             currentProject = proj;
             currentFile = preferredFile;
+            loadClaudeLink(proj);
             title.textContent = `Remote Server Logs — ${proj.name}`;
             subtitle.textContent = `${proj.ssh_username}@${proj.ssh_host} (${(proj.environment || '').toUpperCase()})`;
             modal.style.display = 'flex';

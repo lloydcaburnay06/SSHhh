@@ -123,6 +123,33 @@ GitHub/Bitbucket cannot reach `localhost`. To use push-to-deploy webhooks, expos
 
 ---
 
+## Send Laravel Logs to Claude Code (auto-fix)
+
+Each project can be linked to a **Claude Code scheduled task** (formerly "routine") for its repository. In **Remote Server Logs**, **🤖 Send to Claude** then:
+
+1. Reads a snapshot of the selected log over SSH.
+2. Groups repeated errors into unique issues (warning level and above, newest sample with its stack trace, limited to the 65,536-character payload size) and masks secrets (passwords, tokens, credentials in `mysql://` / `redis://` URLs, `"password":"…"` values).
+3. Starts the project's scheduled task with that report.
+4. Once Claude Code confirms it received the report, removes **only the sent part** of the log. Lines written during sending are kept, and the file keeps its owner and permissions. Nothing is cleared if sending fails.
+
+The scheduled task fixes the bugs, runs the builds and tests, commits, and merges into the branch you choose. If a test fails or a fix is uncertain, it opens a pull request instead.
+
+**Setup (once per Laravel project):**
+
+1. In SSHhh, open the project's logs → **🔗 Claude link** → **Copy prompt**.
+2. At [claude.ai/code/routines](https://claude.ai/code/routines) create a scheduled task: paste the prompt, select the project's GitHub repository, and add an **API** trigger. Copy the **Fire URL** and **token** (the token is shown only once).
+3. Back in SSHhh, paste both, set the merge branch, and click **Save link**.
+
+The token is stored encrypted and never sent back to the browser. Limits: 30 sends per task per hour. Each run uses your Claude subscription usage.
+
+### Automatic checks every 10 minutes
+
+`cli/log_watch.php` checks the log of every project that has **Check this log automatically** turned on in its Claude link. It only starts a Claude Code session when the log has an **error-level issue not reported in the last 24 hours**. A recurring error whose fix is merged but not deployed yet does not start a new session every 10 minutes. Warnings are included in reports but never start one by themselves. Runs never overlap, and each run is recorded in `storage/log_watch.log` and in the Claude link panel.
+
+On Windows, double-click **`cli\install_log_watch_task.bat`** once. It creates the task **SSHhh Log Watch** (every 10 minutes, using `php-win.exe` so no window pops up) and runs one check right away. XAMPP's MySQL must be running. To remove the task: `schtasks /Delete /TN "SSHhh Log Watch" /F`.
+
+---
+
 ## Web Server Security Notes
 
 ### Apache

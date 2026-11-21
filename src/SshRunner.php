@@ -1392,6 +1392,123 @@ BASH;
     /**
      * Sanitizes and validates a requested log file path to prevent directory traversal and injection.
      */
+    /**
+     * Reads a point-in-time snapshot of a remote log: its byte size at that moment and
+     * (up to) the newest $maxBytes of that content. Pass the size to consumeRemoteLog()
+     * later so only what was read gets removed.
+     *
+     * @return array{file: string, size: int, content: string, truncated: bool, project: array<string, mixed>}
+     */
+    public function snapshotRemoteLog(int $projectId, string $file, int $maxBytes = 2000000): array
+    {
+        $cleanFile = $this->sanitizeLogPath($file);
+        if ($cleanFile === null) {
+            throw new \InvalidArgumentException('Invalid remote log file path.');
+        }
+        $maxBytes = max(10000, min(5000000, $maxBytes));
+
+        [$ssh, $project, $cdTarget] = $this->openLogSession($projectId);
+        try {
+            $q = $this->posixQuote($cleanFile);
+            $script = <<<BASH
+cd {$cdTarget} 2>/dev/null || exit 1
+[ -f {$q} ] || { echo "NOT_FOUND"; exit 3; }
+SIZE=\$(wc -c < {$q} | tr -d ' ')
+echo "SIZE=\$SIZE"
+echo "===CONTENT==="
+if [ "\$SIZE" -gt {$maxBytes} ]; then head -c "\$SIZE" {$q} | tail -c {$maxBytes}; else head -c "\$SIZE" {$q}; fi
+BASH;
+            $out = (string) $ssh->exec($this->cleanScript($script));
+            if (str_starts_with(trim($out), 'NOT_FOUND')) {
+                throw new \RuntimeException("Remote log '{$cleanFile}' was not found.");
+            }
+            if (!preg_match('/^SIZE=(\d+)\n===CONTENT===\n/', $out, $m)) {
+                throw new \RuntimeException("Could not read remote log '{$cleanFile}'.");
+            }
+            $size = (int) $m[1];
+            return [
+                'file'      => $cleanFile,
+                'size'      => $size,
+                'content'   => substr($out, strlen($m[0])),
+                'truncated' => $size > $maxBytes,
+                'project'   => $project,
+            ];
+        } finally {
+            if ($ssh->isConnected()) {
+                $ssh->disconnect();
+            }
+        }
+    }
+
+    /**
+     * Removes the first $bytes bytes of a remote log (the part already sent somewhere),
+     * keeping anything written after the snapshot. Rewrites in place so the file keeps
+     * its owner and permissions (Laravel must still be able to write to it).
+     *
+     * @return array{status: string, kept_bytes: int}
+     */
+    public function consumeRemoteLog(int $projectId, string $file, int $bytes): array
+    {
+        $cleanFile = $this->sanitizeLogPath($file);
+        if ($cleanFile === null || $bytes < 0) {
+            throw new \InvalidArgumentException('Invalid remote log file path.');
+        }
+
+        [$ssh, $project, $cdTarget] = $this->openLogSession($projectId);
+        try {
+            $q = $this->posixQuote($cleanFile);
+            $script = <<<BASH
+cd {$cdTarget} 2>/dev/null || exit 1
+[ -f {$q} ] || { echo "NOT_FOUND"; exit 3; }
+CUR=\$(wc -c < {$q} | tr -d ' ')
+if [ "\$CUR" -lt {$bytes} ]; then echo "CHANGED \$CUR"; exit 0; fi
+if [ "\$CUR" -eq {$bytes} ]; then : > {$q} && echo "CLEARED 0"; exit 0; fi
+TMP=\$(mktemp 2>/dev/null || echo {$q}.sshhh.tmp)
+tail -c +\$(({$bytes} + 1)) {$q} > "\$TMP" && cat "\$TMP" > {$q} && rm -f "\$TMP" && echo "CLEARED \$((CUR - {$bytes}))"
+BASH;
+            $out = trim((string) $ssh->exec($this->cleanScript($script)));
+            if (preg_match('/^CLEARED (\d+)/', $out, $m)) {
+                return ['status' => 'cleared', 'kept_bytes' => (int) $m[1]];
+            }
+            if (preg_match('/^CHANGED (\d+)/', $out, $m)) {
+                // File was rotated or cleared by someone else since the snapshot: leave it alone.
+                return ['status' => 'changed', 'kept_bytes' => (int) $m[1]];
+            }
+            throw new \RuntimeException("Failed to clear remote log '{$cleanFile}': " . ($out !== '' ? $out : 'no response'));
+        } finally {
+            if ($ssh->isConnected()) {
+                $ssh->disconnect();
+            }
+        }
+    }
+
+    /**
+     * @return array{0: \phpseclib3\Net\SSH2, 1: array<string, mixed>, 2: string}
+     */
+    private function openLogSession(int $projectId): array
+    {
+        $bundle = $this->projects->getWithDecryptedCredentials($projectId);
+        $project = $bundle['project'];
+        $remotePath = trim((string) $project['remote_path']);
+        if ($remotePath === '') {
+            $remotePath = '~';
+        }
+
+        $conn = $this->connect(
+            host: (string) $project['ssh_host'],
+            port: (int) $project['ssh_port'],
+            username: (string) $project['ssh_username'],
+            authType: (string) $project['ssh_auth_type'],
+            password: $bundle['password'],
+            privateKey: $bundle['private_key'],
+            passphrase: $bundle['passphrase'],
+            timeout: max(5, min(30, (int) ($project['ssh_timeout'] ?? 10))),
+            expectedFingerprint: (string) ($project['host_fingerprint'] ?? '')
+        );
+
+        return [$conn['ssh'], $project, $this->buildCdTarget($remotePath)];
+    }
+
     private function sanitizeLogPath(string $rawPath): ?string
     {
         $clean = trim(str_replace('\\', '/', $rawPath));

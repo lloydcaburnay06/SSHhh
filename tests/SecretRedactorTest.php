@@ -35,6 +35,29 @@ final class SecretRedactorTest extends TestCase
         self::assertStringContainsString('Normal output: Build succeeded in 1.4s', $redacted);
     }
 
+    public function testRedactsDatabaseUrlsAndJsonSecretsInLaravelLogs(): void
+    {
+        $input = implode("\n", [
+            'SQLSTATE[HY000] mysql://forge:SuperSecretPw1@db.internal/shop',
+            'redis connect failed: redis://default:R3disPass@cache:6379',
+            '{"email":"a@b.com","password":"hunter2-long","remember_token":"tok_abcdef123"}',
+            "['api_key' => 'sk_live_998877', 'name' => 'Shop']",
+            'Undefined array key "total" for order 103',
+        ]);
+
+        $redacted = SecretRedactor::redact($input);
+
+        self::assertStringNotContainsString('SuperSecretPw1', $redacted);
+        self::assertStringNotContainsString('R3disPass', $redacted);
+        self::assertStringNotContainsString('hunter2-long', $redacted);
+        self::assertStringNotContainsString('tok_abcdef123', $redacted);
+        self::assertStringNotContainsString('sk_live_998877', $redacted);
+        self::assertStringContainsString('mysql://forge:[REDACTED]@db.internal/shop', $redacted);
+        self::assertStringContainsString('"email":"a@b.com"', $redacted);
+        self::assertStringContainsString("'name' => 'Shop'", $redacted);
+        self::assertStringContainsString('Undefined array key "total" for order 103', $redacted);
+    }
+
     public function testHandlesEmptyStringCleanly(): void
     {
         self::assertSame('', SecretRedactor::redact(''));

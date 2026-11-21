@@ -546,6 +546,35 @@ try {
             $logData = $app->runner()->getRemoteLogs($projectId, $file, $lines);
             respondJson(['ok' => true, 'result' => $logData]);
 
+        case 'get_claude_link':
+        case 'save_claude_link':
+            $projectId = (int) ($body['project_id'] ?? 0);
+            $project = $projectId > 0 ? $app->projects()->find($projectId) : null;
+            if ($project === null) {
+                throw new InvalidArgumentException('Project not found.');
+            }
+            if ($action === 'save_claude_link') {
+                $app->claudeLinks()->save($projectId, $body);
+                $app->logger()->log([
+                    'project_id'   => $projectId,
+                    'project_name' => (string) $project['name'],
+                    'category'     => 'audit',
+                    'event_type'   => 'claude_link_updated',
+                    'status'       => 'info',
+                    'title'        => !empty($body['remove']) ? 'Removed Claude Code link' : 'Updated Claude Code link',
+                ]);
+            }
+            respondJson(['ok' => true, 'result' => $app->claudeLinks()->getPublic($project)]);
+
+        case 'send_log_to_claude':
+            $projectId = (int) ($body['project_id'] ?? 0);
+            $file = trim((string) ($body['file'] ?? ''));
+            if ($projectId <= 0 || $file === '') {
+                throw new InvalidArgumentException('Project ID and log file are required.');
+            }
+            $app->releaseSessionLock();
+            respondJson(['ok' => true, 'result' => $app->claudeSender()->send($projectId, $file)]);
+
         case 'clear_remote_log':
             $projectId = (int) ($body['project_id'] ?? 0);
             $file = trim((string) ($body['file'] ?? ''));

@@ -19,6 +19,8 @@ final class Bootstrap
     private ProjectRepository $projects;
     private SshRunner $runner;
     private VaultBackup $vault;
+    private ?ClaudeLinkRepository $claudeLinks = null;
+    private ?ClaudeLogSender $claudeSender = null;
 
     private function __construct()
     {
@@ -136,6 +138,22 @@ final class Bootstrap
     /**
      * @return array<string, mixed>
      */
+    public function claudeLinks(): ClaudeLinkRepository
+    {
+        return $this->claudeLinks ??= new ClaudeLinkRepository($this->database->pdo(), $this->crypto);
+    }
+
+    public function claudeSender(): ClaudeLogSender
+    {
+        return $this->claudeSender ??= new ClaudeLogSender(
+            $this->runner,
+            $this->projects,
+            $this->claudeLinks(),
+            new ClaudeRoutineClient(),
+            $this->logger
+        );
+    }
+
     public function config(): array
     {
         return $this->config;

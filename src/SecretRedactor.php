@@ -44,7 +44,7 @@ final class SecretRedactor
 
         // 3. Redact embedded credentials in URLs: https://user:pass@host or https://token@host
         $text = preg_replace(
-            '#\b(https?|ftp|ssh)://([^/\s:@]+):([^/\s@]+)@#i',
+            '#\b([a-z][a-z0-9+.\-]*)://([^/\s:@]+):([^/\s@]+)@#i',
             '$1://$2:' . self::MASK . '@',
             $text
         ) ?? $text;
@@ -65,6 +65,13 @@ final class SecretRedactor
         $text = preg_replace(
             '/(^|[\s\'"`])([A-Z0-9_]*(?:PASSWORD|PASSWD|PASS|SECRET|TOKEN|API_KEY|PRIVATE_KEY|APP_KEY|ACCESS_KEY|WEBHOOK_URL)[A-Z0-9_]*)=("[^"]*"|\'[^\']*\'|[^\s\r\n]+)/mi',
             '$1$2=' . self::MASK,
+            $text
+        ) ?? $text;
+
+        // 6. Redact JSON / array style secrets, e.g. "password":"x" or 'api_key' => 'x' (common in Laravel log context)
+        $text = preg_replace(
+            '/(["\'])((?:[A-Za-z0-9_]*)(?:password|passwd|secret|token|api_key|apikey|private_key|access_key|authorization)(?:[A-Za-z0-9_]*))\1(\s*(?::|=>)\s*)(["\'])((?:\\\\.|(?!\4).)*)\4/i',
+            '$1$2$1$3$4' . self::MASK . '$4',
             $text
         ) ?? $text;
 

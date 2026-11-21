@@ -124,7 +124,7 @@ final class AccessGuard
         try {
             self::ensureAttemptsTable($pdo);
             $stmt = $pdo->prepare(<<<'SQL'
-                SELECT COUNT(*) AS `fails`, MIN(`attempted_at`) AS `first_fail`
+                SELECT COUNT(*) AS `fails`, TIMESTAMPDIFF(SECOND, MIN(`attempted_at`), NOW()) AS `elapsed`
                 FROM `login_attempts`
                 WHERE `ip_address` = :ip AND `attempted_at` > DATE_SUB(NOW(), INTERVAL :mins MINUTE)
             SQL);
@@ -133,7 +133,7 @@ final class AccessGuard
             if ((int) ($row['fails'] ?? 0) < self::MAX_FAILED_ATTEMPTS) {
                 return 0;
             }
-            $elapsed = time() - (int) strtotime((string) $row['first_fail']);
+            $elapsed = max(0, (int) ($row['elapsed'] ?? 0));
             return max(1, (int) ceil((self::LOCKOUT_MINUTES * 60 - $elapsed) / 60));
         } catch (Throwable) {
             return 0;
