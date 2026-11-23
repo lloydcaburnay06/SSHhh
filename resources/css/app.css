@@ -243,6 +243,15 @@ a {
     padding: 22px max(24px, env(safe-area-inset-right, 24px)) calc(56px + env(safe-area-inset-bottom, 0px)) max(24px, env(safe-area-inset-left, 24px));
 }
 
+/* Inertia mounts the page inside <div id="app">: it must carry the fixed-height shell
+   so the container below gets a bounded height and its panes scroll independently. */
+body.app-shell > #app {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
 body.app-shell #app > .container {
     flex: 1;
     min-height: 0;
@@ -1956,6 +1965,10 @@ body.app-shell #app > .container {
         height: auto;
         overflow-x: hidden;
         overflow-y: auto;
+        display: block;
+    }
+
+    body.app-shell > #app {
         display: block;
     }
 
