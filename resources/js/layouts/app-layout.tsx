@@ -111,8 +111,9 @@ function Topbar() {
                             <span className="hide-xs">{auth.user.name}</span>
                         </Link>
                     )}
-                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => router.post(url('/logout'))}>
-                        Sign Out
+                    <button type="button" className="btn btn-ghost btn-sm" title="Sign out" onClick={() => router.post(url('/logout'))}>
+                        <span className="show-xs" aria-hidden="true">&#x23FB;</span>
+                        <span className="hide-xs">Sign Out</span>
                     </button>
                 </div>
             </div>

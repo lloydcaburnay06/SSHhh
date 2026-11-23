@@ -84,14 +84,14 @@ function UsersScreen({ initialUsers }: { initialUsers: UserAccount[] }) {
 
     return (
         <>
-            <main className="container users-page">
+            <main className="container page-scroll">
                 <nav className="breadcrumb">
                     <Link href={url('/')}>&larr; All Projects</Link>
                     <span>/</span>
                     <strong>Users</strong>
                 </nav>
 
-                <section className="panel">
+                <section className="panel page-panel">
                     <div className="panel-header">
                         <div>
                             <h2 className="panel-title">Users &amp; workspaces</h2>
@@ -101,13 +101,13 @@ function UsersScreen({ initialUsers }: { initialUsers: UserAccount[] }) {
                             + New user
                         </button>
                     </div>
-                    <div className="panel-body" style={{ overflowX: 'auto' }}>
+                    <div className="panel-body">
                         <table className="users-table">
                             <thead>
                                 <tr>
                                     <th>User</th>
                                     <th>Role</th>
-                                    <th>Projects</th>
+                                    <th className="col-num">Projects</th>
                                     <th>Sign-in</th>
                                     <th>Last sign-in</th>
                                     <th />
@@ -116,21 +116,27 @@ function UsersScreen({ initialUsers }: { initialUsers: UserAccount[] }) {
                             <tbody>
                                 {users.map((u) => (
                                     <tr key={u.id} className={u.is_active ? '' : 'is-disabled'}>
-                                        <td>
-                                            <strong>{u.name}</strong>
-                                            {u.id === me && <span className="form-hint"> (you)</span>}
-                                            <div className="form-hint">{u.email}</div>
+                                        <td className="user-cell">
+                                            <div className="user-name">
+                                                {u.name}
+                                                {u.id === me && <span className="user-meta"> (you)</span>}
+                                            </div>
+                                            <div className="user-email">{u.email}</div>
                                         </td>
-                                        <td>
+                                        <td data-label="Role">
                                             <span className={`role-pill role-${u.roles[0] ?? 'user'}`}>{ROLE_LABELS[u.roles[0] ?? 'user'] ?? u.roles[0]}</span>
-                                            {!u.is_active && <div className="form-hint">Disabled</div>}
+                                            {!u.is_active && <span className="user-meta"> · Disabled</span>}
                                         </td>
-                                        <td>{u.project_count ?? 0}</td>
-                                        <td>
-                                            {u.two_factor_enabled ? '📱 2FA linked' : '⚠️ 2FA not linked'}
-                                            {u.must_change_password && <div className="form-hint">Temporary password</div>}
+                                        <td data-label="Projects" className="col-num">
+                                            {u.project_count ?? 0}
                                         </td>
-                                        <td>{u.last_login_at ?? 'Never'}</td>
+                                        <td data-label="Sign-in">
+                                            <span className={u.two_factor_enabled ? 'status-text-ok' : 'status-text-warn'}>
+                                                {u.two_factor_enabled ? '2FA linked' : '2FA not linked'}
+                                            </span>
+                                            {u.must_change_password && <div className="user-meta">Temporary password</div>}
+                                        </td>
+                                        <td data-label="Last sign-in">{u.last_login_at ?? 'Never'}</td>
                                         <td>
                                             <div className="user-actions">
                                                 {u.id !== me && (

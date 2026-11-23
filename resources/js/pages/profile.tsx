@@ -8,8 +8,8 @@ import type { UserAccount } from '@/types';
 export default function Profile({ account }: { account: UserAccount }) {
     return (
         <AppLayout title="My account">
-            <main className="container">
-                <div className="account-page">
+            <main className="container page-scroll">
+                <div className="page-narrow">
                     <nav className="breadcrumb">
                         <Link href={url('/')}>&larr; All Projects</Link>
                         <span>/</span>
@@ -31,7 +31,7 @@ function DetailsPanel({ account }: { account: UserAccount }) {
     };
 
     return (
-        <section className="panel">
+        <section className="panel page-panel">
             <div className="panel-header">
                 <div className="panel-title-group">
                     <h2 className="panel-title">Account</h2>
@@ -69,12 +69,12 @@ function SecurityPanel({ account }: { account: UserAccount }) {
     };
 
     return (
-        <section className="panel">
+        <section className="panel page-panel">
             <div className="panel-header">
                 <h2 className="panel-title">Sign-in security</h2>
             </div>
             <div className="panel-body">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                <div className="account-row">
                     <div>
                         <strong>Password</strong>
                         <div className="form-hint">Signing in needs your password and a code from your authenticator app.</div>
@@ -90,11 +90,10 @@ function SecurityPanel({ account }: { account: UserAccount }) {
                         <span className={'badge ' + (account.two_factor_enabled ? 'badge-up' : 'badge-down')}>{account.two_factor_enabled ? 'Linked' : 'Not linked'}</span>
                         <div className="form-hint">Moving to a new phone? Confirm your password, then scan a new QR code.</div>
                     </div>
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <div className="account-inline-form">
                         <input
                             type="password"
                             className="form-control"
-                            style={{ maxWidth: 260 }}
                             placeholder="Current password"
                             autoComplete="current-password"
                             value={form.data.current_password}
