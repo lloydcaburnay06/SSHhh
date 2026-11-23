@@ -1,27 +1,31 @@
-# Protect sensitive files and directories
+# SSHhh on XAMPP without a virtual host: http://localhost/deployer/
+# Only the public build assets are served directly; every other request (including
+# .env, storage/, vendor/) goes through Laravel, which serves nothing but its routes.
+# With a virtual host, point its DocumentRoot at public/ instead and this file is unused.
 Options -Indexes
-
-<IfModule mod_mime.c>
-    AddType application/manifest+json .webmanifest
-</IfModule>
-
-<FilesMatch "^(\.|composer\.(json|lock)|README\.md|SECURITY\.md|LICENSE)">
-    Require all denied
-</FilesMatch>
-
-<Files "sw.js">
-    <IfModule mod_headers.c>
-        Header set Cache-Control "no-cache, no-store, must-revalidate"
-    </IfModule>
-</Files>
 
 <IfModule mod_rewrite.c>
     RewriteEngine On
-    RewriteRule ^(\.git|\.github|config|src|storage|vendor)(/|$) - [F,L]
+
+    RewriteRule ^(build|assets)/(.*)$ public/$1/$2 [L]
+    RewriteRule ^(sw\.js|manifest\.webmanifest|offline\.html|favicon\.ico|robots\.txt)$ public/$1 [L]
+
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+    RewriteRule !^public/ index.php [L]
+</IfModule>
+
+<IfModule mod_mime.c>
+    AddType application/manifest+json .webmanifest
 </IfModule>
 
 <IfModule mod_headers.c>
     Header always set X-Content-Type-Options "nosniff"
     Header always set X-Frame-Options "SAMEORIGIN"
     Header always set Referrer-Policy "strict-origin-when-cross-origin"
+    <FilesMatch "^sw\.js$">
+        Header set Cache-Control "no-cache, no-store, must-revalidate"
+        Header set Service-Worker-Allowed "/"
+    </FilesMatch>
 </IfModule>

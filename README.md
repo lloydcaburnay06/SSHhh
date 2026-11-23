@@ -58,10 +58,14 @@
 
 ## Requirements
 
-- **PHP** `>= 8.1` with extensions: `openssl`, `pdo`, `pdo_mysql`, `mbstring`, `json`
+- **PHP** `>= 8.2` with extensions: `openssl`, `pdo`, `pdo_mysql`, `mbstring`, `json`
 - **MySQL** `>= 5.7` or **MariaDB** `>= 10.3`
-- **Composer** `>= 2.0`
+- **Composer** `>= 2.0` and **Node.js** `>= 20` (to build the frontend)
 - **Apache** (XAMPP / WAMP / LAMP with `.htaccess` enabled) or **Nginx**
+
+### Stack
+
+Laravel 12 · Inertia.js 2 · React 19 + TypeScript · Vite · Pest. The SSH, vault and alerting logic lives in `app/Services/`, the JSON API in `app/Http/Controllers/Api/` (routes in `routes/web.php`), and the pages and modals in `resources/js/`.
 
 ---
 
@@ -73,22 +77,34 @@
 git clone https://github.com/<your-username>/sshhh.git deployer
 cd deployer
 composer install --no-dev --optimize-autoloader
+npm ci && npm run build
 ```
 
 ### 2. Configure Environment
 
-Copy `.env.example` to `.env` and adjust your MySQL settings:
-
 ```bash
 cp .env.example .env
+php artisan key:generate
+php artisan migrate
 ```
 
-> **Zero-Setup Database**: On first load, SSHhh automatically creates the configured MySQL database (default `ssh_deployer`), runs schema migrations, and generates a 256-bit master encryption key at `storage/secret.key`.
+Set your MySQL settings and `APP_URL` in `.env` first. The migrations are safe on a database created by a pre-Laravel SSHhh version: existing tables are kept as they are and only missing columns are added. A 256-bit vault master key is generated at `storage/secret.key` on first use unless `DEPLOYER_SECRET_KEY` is set.
+
+> **Upgrading from the pre-Laravel version:** rename the old `.env` keys (`DEPLOYER_DB_HOST` → `DB_HOST`, `DEPLOYER_DB_NAME` → `DB_DATABASE`, `DEPLOYER_DB_USER` → `DB_USERNAME`, `DEPLOYER_DB_PASS` → `DB_PASSWORD`, `DEPLOYER_APP_NAME` → `APP_NAME`, `DEPLOYER_APP_TAGLINE` → `APP_TAGLINE`, `DEPLOYER_TIMEZONE` → `APP_TIMEZONE`), and keep `DEPLOYER_SECRET_KEY` and `storage/secret.key` exactly as they were, or stored credentials can't be decrypted. Re-run `cli\install_log_watch_task.bat` once. Old webhook URLs (`api.php?action=webhook&token=…`) keep working.
 
 ### 3. Open or Install as PWA
 
-- **XAMPP / Apache subdirectory**: `http://localhost/deployer/`
+- **XAMPP / Apache subdirectory**: `http://localhost/deployer/` (the root `.htaccess` and `index.php` route everything through Laravel; a virtual host should point its DocumentRoot at `public/` instead)
+- **Development**: `composer dev` (runs `php artisan serve` and Vite with hot reload)
 - **Install as App**: Click **Install App** in the top navigation bar (Chrome / Edge / Android) or **Share → Add to Home Screen** on iOS Safari. *(Note: Service Workers require `localhost` or `HTTPS`.)*
+
+### Tests
+
+```bash
+php artisan test
+```
+
+Feature tests use a separate MySQL database, `ssh_deployer_testing` (see `phpunit.xml`); create it once before the first run.
 
 ---
 
@@ -96,14 +112,15 @@ cp .env.example .env
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `DEPLOYER_APP_NAME` | `"SSHhh"` | Application brand title |
-| `DEPLOYER_APP_TAGLINE` | `"Deployments so quiet, you can hear a server drop."` | Brand tagline |
-| `DEPLOYER_TIMEZONE` | `UTC` | PHP timezone identifier (e.g., `UTC`, `Asia/Manila`, `America/New_York`) |
-| `DEPLOYER_DB_HOST` | `127.0.0.1` | MySQL / MariaDB host |
-| `DEPLOYER_DB_PORT` | `3306` | MySQL / MariaDB port |
-| `DEPLOYER_DB_NAME` | `ssh_deployer` | Database name (auto-created if permitted) |
-| `DEPLOYER_DB_USER` | `root` | Database username |
-| `DEPLOYER_DB_PASS` | *(empty)* | Database password |
+| `APP_NAME` | `"SSHhh"` | Application brand title |
+| `APP_TAGLINE` | `"Deployments so quiet, you can hear a server drop."` | Brand tagline |
+| `APP_URL` | `http://localhost/deployer` | Where SSHhh is served from |
+| `APP_TIMEZONE` | `UTC` | PHP timezone identifier (e.g., `UTC`, `Asia/Manila`, `America/New_York`) |
+| `DB_HOST` | `127.0.0.1` | MySQL / MariaDB host |
+| `DB_PORT` | `3306` | MySQL / MariaDB port |
+| `DB_DATABASE` | `ssh_deployer` | Database name |
+| `DB_USERNAME` | `root` | Database username |
+| `DB_PASSWORD` | *(empty)* | Database password |
 | `DEPLOYER_SECRET_KEY` | *(auto)* | Optional 32+ char master key override (otherwise stored in `storage/secret.key`) |
 
 ---
@@ -144,13 +161,13 @@ The token is stored encrypted and never sent back to the browser. Limits: 30 sen
 
 ### Automatic checks every 5 minutes
 
-`cli/log_watch.php` runs every 5 minutes and fetches **every project's** live Laravel log over SSH. By default it reads every `storage/logs/laravel*.log` changed in the last 2 days, so `laravel.log` and daily `laravel-YYYY-MM-DD.log` files are both covered.
+`php artisan sshhh:log-watch` runs every 5 minutes and fetches **every project's** live Laravel log over SSH. By default it reads every `storage/logs/laravel*.log` changed in the last 2 days, so `laravel.log` and daily `laravel-YYYY-MM-DD.log` files are both covered.
 
 - **Projects linked to a Claude Code task** with **Send new errors to Claude automatically** on: a new error-level issue that wasn't reported in the last 24 hours goes through the Claude flow. With error escalation on, you get a push notification first; otherwise it's sent straight to Claude. Then the sent lines are cleared.
 - **Every other project:** a new error sends a push notification only, which opens the project page. The log is never cleared or sent anywhere.
 - The same error never notifies or sends twice within 24 hours. Warnings never trigger anything on their own. Runs never overlap.
 
-On Windows, double-click **`cli\install_log_watch_task.bat`** once, or again after updating. It creates the task **SSHhh Log Watch** (every 5 minutes, using `php-win.exe` so no window pops up) and runs one check right away. XAMPP's MySQL must be running. To remove the task: `schtasks /Delete /TN "SSHhh Log Watch" /F`.
+On Windows, double-click **`cli\install_log_watch_task.bat`** once, or again after updating. It creates the task **SSHhh Log Watch** (every 5 minutes, running `php artisan sshhh:log-watch` with `php-win.exe` so no window pops up) and runs one check right away. If you already run `php artisan schedule:run` every minute, the scheduler runs the same check instead. `php artisan sshhh:health-check` pings every project's Health Check URL. XAMPP's MySQL must be running. To remove the task: `schtasks /Delete /TN "SSHhh Log Watch" /F`.
 
 ---
 
@@ -189,20 +206,24 @@ Runs are also written to `storage/log_watch.log`. That file is the only record w
 ## Web Server Security Notes
 
 ### Apache
-`.htaccess` files are included in the root, `config/`, `src/`, `storage/`, and `vendor/` directories to block direct HTTP access (`403 Forbidden`). Ensure `AllowOverride All` is active in your Apache configuration.
+The root `.htaccess` serves only `public/build`, `public/assets` and the PWA files directly and sends every other request (including `.env`, `storage/` and `vendor/`) to Laravel, which only answers its own routes. Ensure `AllowOverride All` is active. Better: point a virtual host's DocumentRoot at `public/`.
 
 ### Nginx
-Nginx ignores `.htaccess` files. Add the following rules inside your Nginx `server {}` block:
+Point `root` at the `public/` directory and use Laravel's standard config:
 
 ```nginx
-location ~ ^/(\.git|\.github|config|src|storage|vendor)/ {
-    deny all;
-    return 403;
+root /var/www/deployer/public;
+index index.php;
+
+location / {
+    try_files $uri $uri/ /index.php?$query_string;
 }
 
-location ~ /(\.|composer\.(json|lock)|README\.md|SECURITY\.md|LICENSE) {
-    deny all;
-    return 403;
+location ~ \.php$ {
+    fastcgi_pass unix:/run/php/php8.3-fpm.sock;
+    fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
+    include fastcgi_params;
+    fastcgi_buffering off; # live deploy output streams line by line
 }
 ```
 
