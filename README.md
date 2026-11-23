@@ -142,21 +142,24 @@ The scheduled task fixes the bugs, runs the builds and tests, commits, and merge
 
 The token is stored encrypted and never sent back to the browser. Limits: 30 sends per task per hour. Each run uses your Claude subscription usage.
 
-### Automatic checks every 10 minutes
+### Automatic checks every 5 minutes
 
-`cli/log_watch.php` checks the log of every project that has **Check this log automatically** turned on in its Claude link. It only starts a Claude Code session when the log has an **error-level issue not reported in the last 24 hours**. A recurring error whose fix is merged but not deployed yet does not start a new session every 10 minutes. Warnings are included in reports but never start one by themselves. Runs never overlap, and each run is recorded in `storage/log_watch.log` and in the Claude link panel.
+`cli/log_watch.php` runs every 5 minutes and fetches **every project's** live Laravel log over SSH. By default it reads every `storage/logs/laravel*.log` changed in the last 2 days, so `laravel.log` and daily `laravel-YYYY-MM-DD.log` files are both covered.
 
-On Windows, double-click **`cli\install_log_watch_task.bat`** once. It creates the task **SSHhh Log Watch** (every 10 minutes, using `php-win.exe` so no window pops up) and runs one check right away. XAMPP's MySQL must be running. To remove the task: `schtasks /Delete /TN "SSHhh Log Watch" /F`.
+- **Projects linked to a Claude Code task** with **Send new errors to Claude automatically** on: a new error-level issue that wasn't reported in the last 24 hours goes through the Claude flow. With error escalation on, you get a push notification first; otherwise it's sent straight to Claude. Then the sent lines are cleared.
+- **Every other project:** a new error sends a push notification only, which opens the project page. The log is never cleared or sent anywhere.
+- The same error never notifies or sends twice within 24 hours. Warnings never trigger anything on their own. Runs never overlap.
+
+On Windows, double-click **`cli\install_log_watch_task.bat`** once, or again after updating. It creates the task **SSHhh Log Watch** (every 5 minutes, using `php-win.exe` so no window pops up) and runs one check right away. XAMPP's MySQL must be running. To remove the task: `schtasks /Delete /TN "SSHhh Log Watch" /F`.
 
 ---
 
-## Error Escalation: Push → SMS → Claude Code
+## Error Escalation: Push → Claude Code
 
 With **Settings → 📟 Error Escalation → "Ask me before sending new errors to Claude Code"** turned on, the automatic checker does not send new errors straight to Claude. It asks you first:
 
-1. **New error found** → a **push notification** on your phone with **🤖 Proceed** and **Ignore** buttons. The text is a plain SMS-style summary of 160 characters or less, written by **Gemini** (free tier) or by SSHhh itself when no Gemini key is set or Gemini fails.
-2. **No answer within 10 minutes** → the same summary is sent by **SMS (PhilSMS)**. The SMS is only an alert; decide with the notification or in SSHhh. SMS is only ever sent for errors.
-3. **Still no answer 10 minutes after the SMS** → the log is **sent to Claude Code automatically**.
+1. **New error found** → a **push notification** on your phone with **🤖 Proceed** and **Ignore** buttons. The text is a plain summary of 160 characters or less, written by **Gemini** (free tier) or by SSHhh itself when no Gemini key is set or Gemini fails.
+2. **No answer within 10 minutes** → the log is **sent to Claude Code automatically** at the next check (10–15 minutes, since checks run every 5 minutes).
 
 **Ignore** stops the same errors from alerting again for 24 hours. Tapping the notification itself opens an alert page with the same two buttons, which is how it works on iPhone, where notification buttons aren't shown. Only one alert is open per project at a time. Anything newer is included when that alert is sent.
 
@@ -164,12 +167,22 @@ With **Settings → 📟 Error Escalation → "Ask me before sending new errors 
 
 ### Setup
 
-1. **Get your phone to SSHhh over HTTPS.** Browsers only allow push notifications on HTTPS sites. A Cloudflare Tunnel is free and needs no open ports. Install `cloudflared` on this PC, run `cloudflared tunnel login`, then create a tunnel that points a hostname such as `deployer.yourdomain.com` at `http://localhost:80` (or `http://localhost:8090` if you serve SSHhh on its own port). Open that address on your phone and sign in with Google Authenticator. On iPhone, tap Share → **Add to Home Screen** and open SSHhh from the icon, since iOS only allows push for installed web apps.
-2. **Turn on notifications:** on the phone, open **Settings → 📟 Error Escalation → 🔔 Turn on notifications on this device**, then **Send test notification**.
-3. **Gemini (optional):** create a free API key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey) and paste it in. **Preview a summary** shows an example SMS.
-4. **PhilSMS:** paste your API token, your approved **Sender ID**, and your mobile number, then **Send test SMS**.
-5. Tick **Ask me before sending new errors to Claude Code** and **Save**.
-6. **Re-run `cli\install_log_watch_task.bat`**: the task now runs every minute so the 10-minute timers are on time. Logs are still checked every 10 minutes per project.
+1. **Open SSHhh over HTTPS on your phone** (e.g. through a Cloudflare Tunnel) and sign in with Google Authenticator. Browsers only allow push notifications on HTTPS sites. On iPhone, tap Share → **Add to Home Screen** and open SSHhh from the icon.
+2. **Settings → 📟 Error Escalation → 🔔 Turn on notifications on this device**, then **Send test notification**.
+3. **Gemini (optional):** create a free API key at [aistudio.google.com/apikey](https://aistudio.google.com/apikey) and paste it in. **Preview a summary** shows an example.
+4. Tick **Ask me before sending new errors to Claude Code** and **Save**.
+
+---
+
+## Log Checker Status
+
+**Settings → 🩺 Log Checker** shows whether the scheduled checker is working:
+
+- **Health:** ✅ *Working* when the scheduled task ran in the last 11 minutes, ❌ *Not running* (with what to check) when it hasn't, ⚠️ when the last run had errors.
+- **Projects:** every project, whether it is linked to Claude and checked automatically, its last check time and result.
+- **Run history:** every run is recorded, including runs where no project was due yet. Tap a run to see what it did for each project. **▶ Run check now** checks every watched project immediately.
+
+Runs are also written to `storage/log_watch.log`. That file is the only record when the checker can't start, for example when XAMPP's MySQL is stopped. History is kept for 7 days.
 
 ---
 

@@ -16,6 +16,8 @@ final class ClaudeLinkRepository
     public const FIRE_URL_RE = '#^https://api\.anthropic\.com/v1/claude_code/routines/trig_[A-Za-z0-9_-]{6,}/fire$#';
 
     public const DEFAULT_WATCH_FILE = 'storage/logs/laravel.log';
+    /** Watch every recently changed storage/logs/laravel*.log (single and daily channels). */
+    public const AUTO_WATCH = 'auto';
     private const REMEMBER_SECONDS = 86400;
 
     private bool $tableReady = false;
@@ -43,7 +45,7 @@ final class ClaudeLinkRepository
             'last_sent_at'     => $row['last_sent_at'] ?? null,
             'last_session_url' => $row['last_session_url'] ?? null,
             'auto_watch'       => $row !== null && (bool) $row['auto_watch'],
-            'watch_file'       => (string) ($row['watch_file'] ?? '') ?: self::DEFAULT_WATCH_FILE,
+            'watch_file'       => self::effectiveWatchFile($row['watch_file'] ?? null),
             'last_watch_at'    => $row['last_watch_at'] ?? null,
             'last_watch_result'=> $row['last_watch_result'] ?? null,
             'prompt_template'  => self::promptTemplate($project, $mergeBranch),
@@ -100,9 +102,9 @@ final class ClaudeLinkRepository
             throw new InvalidArgumentException('Merge branch contains invalid characters.');
         }
 
-        $watchFile = trim((string) ($input['watch_file'] ?? '')) ?: self::DEFAULT_WATCH_FILE;
-        if (str_contains($watchFile, '..') || !preg_match('#^[A-Za-z0-9._/-]+\.log$#', $watchFile)) {
-            throw new InvalidArgumentException('Log file to watch must be a relative path ending in .log, e.g. storage/logs/laravel.log');
+        $watchFile = self::effectiveWatchFile(trim((string) ($input['watch_file'] ?? '')));
+        if ($watchFile !== self::AUTO_WATCH && (str_contains($watchFile, '..') || !preg_match('#^[A-Za-z0-9._/-]+\.log$#', $watchFile))) {
+            throw new InvalidArgumentException('Log file to watch must be "auto" (all Laravel logs) or a relative path ending in .log, e.g. storage/logs/laravel.log');
         }
 
         $tokenEnc = $token !== ''
@@ -136,6 +138,17 @@ final class ClaudeLinkRepository
         $this->ensureTable();
         $this->pdo->prepare('UPDATE `project_claude_links` SET `last_sent_at` = NOW(), `last_session_url` = :url WHERE `project_id` = :id')
             ->execute([':url' => mb_substr($sessionUrl, 0, 255), ':id' => $projectId]);
+    }
+
+    /**
+     * Blank, "auto" and the old default (storage/logs/laravel.log) all mean: every recently
+     * changed storage/logs/laravel*.log. Laravel's "daily" channel writes laravel-YYYY-MM-DD.log,
+     * which the old single-file default never saw.
+     */
+    public static function effectiveWatchFile(?string $stored): string
+    {
+        $v = trim((string) $stored);
+        return ($v === '' || strtolower($v) === self::AUTO_WATCH || $v === self::DEFAULT_WATCH_FILE) ? self::AUTO_WATCH : $v;
     }
 
     /**
@@ -182,20 +195,65 @@ final class ClaudeLinkRepository
             ->execute([':j' => json_encode($map), ':id' => $projectId]);
     }
 
+    /**
+     * Every project with its automatic-check status (for Settings → Log Checker).
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function watchOverview(): array
+    {
+        $this->ensureTable();
+        $rows = $this->pdo->query(<<<'SQL'
+            SELECT p.`id`, p.`name`, p.`environment`,
+                (l.`project_id` IS NOT NULL AND l.`fire_url` <> '' AND l.`token_encrypted` IS NOT NULL) AS `linked`,
+                COALESCE(l.`auto_watch`, 0) AS `auto_watch`,
+                l.`watch_file`, l.`last_watch_at`, l.`last_watch_result`, l.`last_sent_at`, l.`last_session_url`,
+                TIMESTAMPDIFF(SECOND, l.`last_watch_at`, NOW()) AS `seconds_since_check`
+            FROM `projects` p
+            LEFT JOIN `project_claude_links` l ON l.`project_id` = p.`id`
+            ORDER BY p.`name`
+        SQL)->fetchAll(PDO::FETCH_ASSOC);
+        return array_map(static function (array $r): array {
+            $r['linked'] = (bool) $r['linked'];
+            $r['auto_watch'] = (bool) $r['auto_watch'];
+            $r['watch_file'] = self::effectiveWatchFile($r['watch_file'] ?? null);
+            $r['seconds_since_check'] = $r['seconds_since_check'] !== null ? (int) $r['seconds_since_check'] : null;
+            return $r;
+        }, $rows);
+    }
+
     /** True when the log has not been checked in the last $minutes minutes (compared in MySQL). */
     public function isDueForCheck(int $projectId, int $minutes): bool
     {
         $this->ensureTable();
         $stmt = $this->pdo->prepare('SELECT `last_watch_at` IS NULL OR TIMESTAMPDIFF(SECOND, `last_watch_at`, NOW()) >= :s FROM `project_claude_links` WHERE `project_id` = :id');
         $stmt->execute([':s' => max(1, $minutes) * 60 - 20, ':id' => $projectId]);
-        return (bool) $stmt->fetchColumn();
+        $due = $stmt->fetchColumn();
+        return $due === false || (bool) $due; // no row yet = never checked = due
     }
 
     public function recordWatch(int $projectId, string $result): void
     {
         $this->ensureTable();
-        $this->pdo->prepare('UPDATE `project_claude_links` SET `last_watch_at` = NOW(), `last_watch_result` = :r WHERE `project_id` = :id')
-            ->execute([':r' => mb_substr($result, 0, 255), ':id' => $projectId]);
+        // Every project is monitored, so projects without a Claude link get a row too (empty fire_url = not linked)
+        $this->pdo->prepare(<<<'SQL'
+            INSERT INTO `project_claude_links` (`project_id`, `fire_url`, `updated_at`, `last_watch_at`, `last_watch_result`)
+            VALUES (:id, '', NOW(), NOW(), :r)
+            ON DUPLICATE KEY UPDATE `last_watch_at` = NOW(), `last_watch_result` = VALUES(`last_watch_result`)
+        SQL)->execute([':r' => mb_substr($result, 0, 255), ':id' => $projectId]);
+    }
+
+    /** Linked to a Claude Code task and "send new errors to Claude automatically" is on. */
+    public function sendsToClaude(int $projectId): bool
+    {
+        return in_array($projectId, $this->autoWatchProjectIds(), true);
+    }
+
+    /** The file setting for a project's automatic check ("auto" unless a specific file was saved). */
+    public function watchFileFor(int $projectId): string
+    {
+        $row = $this->row($projectId);
+        return self::effectiveWatchFile($row['watch_file'] ?? null);
     }
 
     /**

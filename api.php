@@ -586,12 +586,22 @@ try {
         case 'test_push':
             respondJson(['ok' => true, 'result' => ['message' => $app->alerts()->sendTestPush()]]);
 
-        case 'check_sms_token':
-            respondJson(['ok' => true, 'result' => ['message' => $app->alertChannels()->checkSmsToken()]]);
+        case 'get_log_checker':
+            respondJson(['ok' => true, 'result' => $app->logWatcher()->overview((int) ($body['limit'] ?? 40))]);
 
-        case 'test_sms':
-            $msg = $app->alertChannels()->sendSms('SSHhh test: SMS alerts work. You will get these only when a new Laravel error is found.');
-            respondJson(['ok' => true, 'result' => ['message' => $msg]]);
+        case 'run_log_check_now':
+            $app->releaseSessionLock();
+            @set_time_limit(300);
+            $lock = fopen(__DIR__ . '/storage/log_watch.lock', 'c');
+            if ($lock === false || !flock($lock, LOCK_EX | LOCK_NB)) {
+                throw new RuntimeException('A check is running right now (scheduled task). Try again in a moment.');
+            }
+            try {
+                $run = $app->logWatcher()->run('manual', null, true);
+            } finally {
+                flock($lock, LOCK_UN);
+            }
+            respondJson(['ok' => true, 'result' => $run]);
 
         case 'test_summary':
             $s = $app->alertChannels()->summarize('Bansay', [

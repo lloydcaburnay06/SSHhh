@@ -1,5 +1,5 @@
 @echo off
-REM Registers the SSHhh automatic log checker in Windows Task Scheduler (every minute; each project log is checked every 10 minutes).
+REM Registers the SSHhh automatic log checker in Windows Task Scheduler (every 5 minutes; every project log is checked each run).
 REM Double-click this file. To remove the task later: schtasks /Delete /TN "SSHhh Log Watch" /F
 setlocal
 set "PHPDIR=C:\xampp\php"
@@ -13,7 +13,7 @@ if not exist "%PHPDIR%\php.exe" (
     exit /b 1
 )
 
-schtasks /Create /TN "SSHhh Log Watch" /SC MINUTE /MO 1 /TR "\"%PHPRUN%\" \"%SCRIPT%\"" /F
+schtasks /Create /TN "SSHhh Log Watch" /SC MINUTE /MO 5 /TR "\"%PHPRUN%\" \"%SCRIPT%\"" /F
 if errorlevel 1 (
     echo.
     echo Could not create the scheduled task.
@@ -22,7 +22,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo Scheduled task "SSHhh Log Watch" created: runs every minute while you are signed in (logs are checked every 10 minutes).
+echo Scheduled task "SSHhh Log Watch" created: runs every 5 minutes while you are signed in and checks every project log.
 echo Running one check now so you can see the result:
 echo.
 "%PHPDIR%\php.exe" "%SCRIPT%"

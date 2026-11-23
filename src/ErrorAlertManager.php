@@ -11,11 +11,8 @@ use Throwable;
 /**
  * Error escalation, driven by cli/log_watch.php (every minute):
  *
- *   new error found ──► push notification (Proceed / Ignore) + Gemini SMS summary prepared
+ *   new error found ──► push notification (Proceed / Ignore) with a short Gemini summary
  *        │ no decision within push_wait_min (10)
- *        ▼
- *   SMS alert via PhilSMS (information only — decide in the notification/app)
- *        │ no decision within sms_wait_min (10) after the SMS
  *        ▼
  *   log sent to Claude Code automatically
  *
@@ -103,10 +100,53 @@ final class ErrorAlertManager
             'title'        => "New error alert: {$summary['text']}",
             'output_log'   => "Log file: {$file}\nIssues: " . count($issues) . "\nSummary ({$summary['source']}): {$summary['text']}"
                 . ($summary['note'] ? "\n{$summary['note']}" : '')
-                . "\nPush: {$pushResult}\nSMS in {$cfg['push_wait_min']} min and Claude Code {$cfg['sms_wait_min']} min after that, unless you choose Proceed or Ignore.",
+                . "\nPush: {$pushResult}\nSent to Claude Code in {$cfg['push_wait_min']} min unless you choose Proceed or Ignore.",
         ]);
 
         return ['id' => $id, 'summary' => $summary['text'], 'push' => $pushResult];
+    }
+
+    /**
+     * Notification only, for projects that don't send to Claude: no Proceed / Ignore and no
+     * timer. Recorded as an alert with status "notified" so the same errors don't notify again
+     * for 24 hours.
+     *
+     * @param array<string, mixed> $project
+     * @param list<array{hash: string, level: string, headline: string}> $issues
+     * @return array<string, mixed>
+     */
+    public function notifyOnly(array $project, string $file, array $issues): array
+    {
+        $this->ensureTable();
+        $projectId = (int) $project['id'];
+        $name = (string) $project['name'];
+        $headlines = array_map(static fn(array $i): string => self::shortHeadline($i['headline']), $issues);
+        $summary = $this->channels->summarize($name, $headlines, count($issues));
+
+        $this->pdo->prepare(<<<'SQL'
+            INSERT INTO `error_alerts` (`project_id`, `project_name`, `log_file`, `summary`, `summary_source`, `issue_hashes`, `issue_count`, `status`, `token_hash`, `created_at`, `decided_at`, `decided_via`)
+            VALUES (:p, :n, :f, :s, :src, :h, :c, 'notified', :t, NOW(), NOW(), 'monitor')
+        SQL)->execute([
+            ':p' => $projectId, ':n' => $name, ':f' => $file, ':s' => $summary['text'], ':src' => $summary['source'],
+            ':h' => json_encode(array_column($issues, 'hash')), ':c' => count($issues), ':t' => hash('sha256', random_bytes(24)),
+        ]);
+        $id = (int) $this->pdo->lastInsertId();
+
+        try {
+            $push = self::pushSummary($this->push->sendToAll([
+                'title' => "⚠️ {$name}: new error",
+                'body'  => $summary['text'],
+                'tag'   => 'sshhh-alert-' . $id,
+                'url'   => 'project.php?id=' . $projectId,
+            ]));
+        } catch (Throwable $e) {
+            $push = 'Push failed: ' . $e->getMessage();
+        }
+        $this->update($id, ['push_result' => $push]);
+        $this->audit(['id' => $id, 'project_id' => $projectId, 'project_name' => $name, 'summary' => $summary['text']],
+            'New error found (monitor only)', "Log: {$file}\nPush: {$push}\nThis project is not set to send errors to Claude Code.");
+
+        return ['id' => $id, 'summary' => $summary['text'], 'push' => $push];
     }
 
     /**
@@ -153,35 +193,17 @@ final class ErrorAlertManager
         $lines = [];
 
         $stmt = $this->pdo->prepare(<<<'SQL'
-            SELECT *,
-                TIMESTAMPDIFF(SECOND, `created_at`, NOW()) AS `age_s`,
-                TIMESTAMPDIFF(SECOND, `sms_sent_at`, NOW()) AS `since_sms_s`
+            SELECT *, TIMESTAMPDIFF(SECOND, `created_at`, NOW()) AS `age_s`
             FROM `error_alerts` WHERE `status` = 'pending' ORDER BY `id`
         SQL);
         $stmt->execute();
         foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $a) {
             $id = (int) $a['id'];
             try {
-                if ($a['sms_sent_at'] === null) {
-                    if ((int) $a['age_s'] >= $cfg['push_wait_min'] * 60) {
-                        // Step 2: no decision on the notification → SMS alert (errors only, by construction)
-                        try {
-                            $res = $this->channels->smsConfigured()
-                                ? $this->channels->sendSms((string) $a['summary'])
-                                : 'SMS skipped (PhilSMS not configured)';
-                        } catch (Throwable $e) {
-                            $res = 'SMS failed: ' . $e->getMessage();
-                        }
-                        $this->update($id, ['sms_sent_at' => 'NOW()', 'sms_result' => $res]);
-                        $this->audit($a, 'Error alert: no action on notification → SMS', $res);
-                        $lines[] = "{$a['project_name']}: {$res}";
-                    }
-                } elseif ((int) $a['since_sms_s'] >= $cfg['sms_wait_min'] * 60) {
-                    // Step 3: still no decision 10 minutes after the SMS → send to Claude
-                    if ($this->claim($id)) {
-                        $r = $this->sendToClaude($a, 'auto_sent', 'timeout');
-                        $lines[] = "{$a['project_name']}: {$r['message']}";
-                    }
+                if ((int) $a['age_s'] >= $cfg['push_wait_min'] * 60 && $this->claim($id)) {
+                    // No decision on the notification in time → send to Claude Code
+                    $r = $this->sendToClaude($a, 'auto_sent', 'timeout');
+                    $lines[] = "{$a['project_name']}: no response for {$cfg['push_wait_min']} min → {$r['message']}";
                 }
             } catch (Throwable $e) {
                 $lines[] = "{$a['project_name']}: alert #{$id} error: " . $e->getMessage();
@@ -200,7 +222,7 @@ final class ErrorAlertManager
     {
         $this->ensureTable();
         $limit = max(1, min(100, $limit));
-        $rows = $this->pdo->query("SELECT `id`, `project_id`, `project_name`, `summary`, `summary_source`, `issue_count`, `status`, `created_at`, `push_result`, `sms_sent_at`, `sms_result`, `decided_at`, `decided_via`, `session_url`, `error` FROM `error_alerts` ORDER BY `id` DESC LIMIT {$limit}")
+        $rows = $this->pdo->query("SELECT `id`, `project_id`, `project_name`, `summary`, `summary_source`, `issue_count`, `status`, `created_at`, `push_result`, `decided_at`, `decided_via`, `session_url`, `error` FROM `error_alerts` ORDER BY `id` DESC LIMIT {$limit}")
             ->fetchAll(PDO::FETCH_ASSOC);
         return $rows;
     }
@@ -222,7 +244,6 @@ final class ErrorAlertManager
             'issue_count'  => (int) $a['issue_count'],
             'status'       => $a['status'],
             'created_at'   => $a['created_at'],
-            'sms_sent_at'  => $a['sms_sent_at'],
             'status_text'  => self::statusText($a),
         ];
     }
@@ -249,7 +270,7 @@ final class ErrorAlertManager
         try {
             $res = $this->sender->send((int) $alert['project_id'], (string) $alert['log_file']);
             $this->update($id, ['status' => $status, 'decided_at' => 'NOW()', 'decided_via' => $via, 'session_url' => (string) $res['session_url']]);
-            $label = $status === 'auto_sent' ? 'No response for 20 minutes — sent to Claude Code' : 'Sent to Claude Code';
+            $label = $status === 'auto_sent' ? 'No response — sent to Claude Code' : 'Sent to Claude Code';
             $this->notify($id, null, "🤖 {$alert['project_name']}: {$label}", (string) $alert['summary'], false, (string) $res['session_url']);
             return ['ok' => true, 'status' => $status, 'message' => $res['message'], 'session_url' => (string) $res['session_url']];
         } catch (Throwable $e) {
@@ -312,13 +333,14 @@ final class ErrorAlertManager
     private static function statusText(array $a): string
     {
         return match ((string) $a['status']) {
-            'pending'    => $a['sms_sent_at'] ? 'Waiting for your decision. SMS was sent; it goes to Claude Code automatically soon.' : 'Waiting for your decision.',
+            'pending'    => 'Waiting for your decision. If you do nothing, it goes to Claude Code automatically.',
             'processing' => 'Sending to Claude Code…',
             'proceeded'  => 'Sent to Claude Code.',
             'auto_sent'  => 'Sent to Claude Code automatically (no response).',
             'ignored'    => 'Ignored.',
             'failed'     => 'Sending to Claude Code failed: ' . ($a['error'] ?? ''),
             'expired'    => 'Expired.',
+            'notified'   => 'Notification only (this project does not send errors to Claude Code).',
             default      => (string) $a['status'],
         };
     }

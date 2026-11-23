@@ -86,11 +86,12 @@
                             Clear sent lines from the log after Claude Code receives them
                         </label>
                         <label style="font-size:11.5px; color:var(--text-secondary);">Log file to check automatically
-                            <input type="text" id="claudeWatchFileInput" class="form-control" placeholder="storage/logs/laravel.log" style="font-size:12px; padding:4px 8px; width:100%;">
+                            <input type="text" id="claudeWatchFileInput" class="form-control" placeholder="auto" title="auto = every storage/logs/laravel*.log changed in the last 2 days (laravel.log and daily laravel-YYYY-MM-DD.log). Or enter one file, e.g. storage/logs/custom.log" style="font-size:12px; padding:4px 8px; width:100%;">
+                            <span style="display:block; font-size:10.5px; color:var(--text-muted); margin-top:2px;">auto = all recent storage/logs/laravel*.log files (incl. daily logs)</span>
                         </label>
                         <label style="font-size:11.5px; color:var(--text-secondary); display:flex; align-items:center; gap:6px; margin-top:16px;" title="Used by cli/log_watch.php (Windows Task Scheduler, every 10 minutes)">
                             <input type="checkbox" id="claudeAutoWatchInput">
-                            Check this log automatically and send new errors to Claude
+                            Send new errors to Claude automatically (every project's log is checked every 5 minutes; without this, you only get a notification)
                         </label>
                     </div>
                     <div id="claudeWatchStatus" style="font-size:11.5px; color:var(--text-muted); margin-top:6px;"></div>

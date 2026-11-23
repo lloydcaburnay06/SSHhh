@@ -2274,6 +2274,7 @@
         const panes = {
             profiles: document.getElementById('settingsPaneProfiles'),
             notifications: document.getElementById('settingsPaneNotifications'),
+            checker: document.getElementById('settingsPaneChecker'),
             alerts: document.getElementById('settingsPaneAlerts'),
             vault: document.getElementById('settingsPaneVault')
         };
@@ -2309,6 +2310,7 @@
         if (footerCloseBtn) footerCloseBtn.addEventListener('click', closeModal);
         modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
 
+        let checkerTimer = null;
         function switchTab(tabKey) {
             tabBtns.forEach((btn) => {
                 const isMatch = btn.dataset.settingsTab === tabKey;
@@ -2321,9 +2323,89 @@
             if (tabKey === 'profiles') loadProfiles();
             if (tabKey === 'notifications') loadNotifications();
             if (tabKey === 'alerts') loadAlertSettings();
+            if (tabKey === 'checker') loadLogChecker();
+            if (checkerTimer) { clearInterval(checkerTimer); checkerTimer = null; }
+            if (tabKey === 'checker') checkerTimer = setInterval(() => {
+                if (panes.checker && panes.checker.offsetParent !== null) loadLogChecker(); else { clearInterval(checkerTimer); checkerTimer = null; }
+            }, 30000);
         }
 
-        // ---------------- Error escalation (push → SMS → Claude Code) ----------------
+        // ---------------- Log checker status & run history ----------------
+        const checkerOpenRuns = new Set();
+
+        function renderLogChecker(r) {
+            const h = document.getElementById('checkerHealth');
+            const tone = { ok: ['✅', 'rgba(34,197,94,.10)', 'rgba(34,197,94,.45)'], error: ['⚠️', 'rgba(234,179,8,.10)', 'rgba(234,179,8,.45)'],
+                stopped: ['❌', 'rgba(239,68,68,.10)', 'rgba(239,68,68,.45)'], never: ['❌', 'rgba(239,68,68,.10)', 'rgba(239,68,68,.45)'] }[r.health.state];
+            h.style.background = tone[1];
+            h.style.borderColor = tone[2];
+            h.innerHTML = `<strong>${tone[0]} ${r.health.state === 'ok' ? 'Working' : r.health.state === 'error' ? 'Working, with errors' : 'Not running'}</strong><br><span style="color:var(--text-secondary);">${escapeHtml(r.health.text)}</span>`;
+
+            const t = r.last_24h || {};
+            document.getElementById('checkerToday').textContent =
+                `Last 24 hours: ${t.runs || 0} runs · ${t.checks || 0} log checks · ${t.alerts || 0} alerts · ${t.sent || 0} sent to Claude · ${t.errors || 0} errors`;
+
+            const ago = (s) => s === null || s === undefined ? 'never' : s < 90 ? `${s}s ago` : s < 5400 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`;
+            document.getElementById('checkerProjects').innerHTML = (r.projects || []).map((p) => {
+                const state = p.linked && p.auto_watch
+                    ? '<span style="color:#4ade80;">Monitored → Claude</span>'
+                    : '<span style="color:#93c5fd;">Monitored · notification only</span>';
+                const result = `<div style="color:var(--text-secondary);">${escapeHtml(p.watch_file === 'auto' ? 'all laravel*.log' : p.watch_file)} · last check ${ago(p.seconds_since_check)}${p.last_watch_result ? ' — ' + escapeHtml(p.last_watch_result) : ''}</div>`;
+                return `<div style="padding:6px 0; border-bottom:1px solid var(--border-subtle);"><strong>${escapeHtml(p.name)}</strong> · ${state}${result}</div>`;
+            }).join('') || '<span style="color:var(--text-muted);">No projects yet.</span>';
+
+            const icon = { ok: '✅', error: '❌', running: '⏳' };
+            document.getElementById('checkerRuns').innerHTML = (r.runs || []).map((run) => {
+                const open = checkerOpenRuns.has(String(run.id));
+                return `<div class="checker-run" data-run="${run.id}" style="padding:5px 4px; border-bottom:1px solid var(--border-subtle); cursor:pointer;">
+                    ${icon[run.status] || '•'} <strong>${escapeHtml(run.started_at)}</strong>
+                    <span style="color:var(--text-muted);">${run.trigger_type === 'manual' ? '(run now)' : ''} ${run.duration_ms} ms</span><br>
+                    <span style="color:var(--text-secondary);">${escapeHtml(run.summary || 'running…')}</span>
+                    <pre style="display:${open ? 'block' : 'none'}; white-space:pre-wrap; margin:6px 0 2px; padding:8px; background:rgba(0,0,0,.25); border-radius:6px; font-size:11.5px;">${escapeHtml(run.details || '')}</pre></div>`;
+            }).join('') || '<span style="color:var(--text-muted);">No runs recorded yet.</span>';
+        }
+
+        async function loadLogChecker() {
+            try {
+                const res = await apiPost('get_log_checker', { limit: 60 });
+                renderLogChecker(res.result);
+            } catch (err) {
+                const h = document.getElementById('checkerHealth');
+                if (h) h.textContent = 'Could not load checker status: ' + err.message;
+            }
+        }
+
+        const checkerRuns = document.getElementById('checkerRuns');
+        if (checkerRuns) {
+            checkerRuns.addEventListener('click', (e) => {
+                const row = e.target.closest('.checker-run');
+                if (!row) return;
+                const pre = row.querySelector('pre');
+                const id = row.dataset.run;
+                const show = pre.style.display === 'none';
+                pre.style.display = show ? 'block' : 'none';
+                if (show) checkerOpenRuns.add(id); else checkerOpenRuns.delete(id);
+            });
+            document.getElementById('checkerRefreshBtn').addEventListener('click', loadLogChecker);
+            document.getElementById('checkerRunNowBtn').addEventListener('click', async () => {
+                const btn = document.getElementById('checkerRunNowBtn');
+                btn.disabled = true;
+                btn.textContent = 'Checking all projects…';
+                try {
+                    const res = await apiPost('run_log_check_now', {});
+                    checkerOpenRuns.add(String(res.result.id));
+                    toast(res.result.summary, res.result.errors > 0 ? 'error' : 'success');
+                    await loadLogChecker();
+                } catch (err) {
+                    toast(err.message, 'error');
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = '▶ Run check now';
+                }
+            });
+        }
+
+        // ---------------- Error escalation (push → Claude Code) ----------------
         const alertForm = document.getElementById('alertSettingsForm');
         const $a = (id) => document.getElementById(id);
         let alertVapidKey = '';
@@ -2353,12 +2435,12 @@
                 el.innerHTML = '<span style="color:var(--text-muted);">No alerts yet.</span>';
                 return;
             }
-            const label = { pending: '⏳ waiting', processing: '⏳ sending', proceeded: '🤖 proceeded', auto_sent: '🤖 auto-sent', ignored: '🙈 ignored', failed: '❌ failed', expired: '⌛ expired' };
+            const label = { pending: '⏳ waiting', processing: '⏳ sending', proceeded: '🤖 proceeded', auto_sent: '🤖 auto-sent', ignored: '🙈 ignored', failed: '❌ failed', expired: '⌛ expired', notified: '🔔 notified' };
             el.innerHTML = alerts.map((a) => `<div style="padding:5px 0; border-bottom:1px solid var(--border-subtle);">
                 <strong>${escapeHtml(a.project_name)}</strong> · ${escapeHtml(a.created_at)} · ${label[a.status] || escapeHtml(a.status)}
                 ${a.session_url ? ` · <a href="${escapeHtml(a.session_url)}" target="_blank" rel="noopener">session</a>` : ''}
                 <div style="color:var(--text-secondary);">${escapeHtml(a.summary)}</div>
-                <div style="color:var(--text-muted);">${escapeHtml(a.push_result || '')}${a.sms_result ? ' · ' + escapeHtml(a.sms_result) : ''}${a.error ? ' · ' + escapeHtml(a.error) : ''}</div></div>`).join('');
+                <div style="color:var(--text-muted);">${escapeHtml(a.push_result || '')}${a.error ? ' · ' + escapeHtml(a.error) : ''}</div></div>`).join('');
         }
 
         async function loadAlertSettings() {
@@ -2370,14 +2452,9 @@
                 alertVapidKey = r.vapid_key;
                 $a('alert_enabled').checked = !!c.enabled;
                 $a('alert_push_wait_min').value = c.push_wait_min;
-                $a('alert_sms_wait_min').value = c.sms_wait_min;
                 $a('alert_gemini_model').value = c.gemini_model || '';
                 $a('alert_gemini_key').value = '';
                 $a('alertGeminiSaved').style.display = c.has_gemini_key ? '' : 'none';
-                $a('alert_philsms_token').value = '';
-                $a('alertSmsSaved').style.display = c.has_philsms_token ? '' : 'none';
-                $a('alert_philsms_sender').value = c.philsms_sender || '';
-                $a('alert_philsms_to').value = c.philsms_to || '';
                 const secureOk = window.isSecureContext;
                 $a('alertPushInsecure').style.display = secureOk ? 'none' : 'block';
                 $a('alertEnablePushBtn').disabled = !secureOk || !('PushManager' in window);
@@ -2397,12 +2474,8 @@
                     await apiPost('save_alert_settings', {
                         enabled: $a('alert_enabled').checked,
                         push_wait_min: parseInt($a('alert_push_wait_min').value, 10) || 10,
-                        sms_wait_min: parseInt($a('alert_sms_wait_min').value, 10) || 10,
                         gemini_key: $a('alert_gemini_key').value.trim(),
-                        gemini_model: $a('alert_gemini_model').value.trim(),
-                        philsms_token: $a('alert_philsms_token').value.trim(),
-                        philsms_sender: $a('alert_philsms_sender').value.trim(),
-                        philsms_to: $a('alert_philsms_to').value.trim()
+                        gemini_model: $a('alert_gemini_model').value.trim()
                     });
                     toast('Escalation settings saved.', 'success');
                     await loadAlertSettings();
@@ -2451,8 +2524,6 @@
                 });
             };
             simple('alertTestPushBtn', 'test_push', '');
-            simple('alertTestSmsBtn', 'test_sms', '');
-            simple('alertCheckSmsBtn', 'check_sms_token', '');
 
             $a('alertTestSummaryBtn').addEventListener('click', async () => {
                 const out = $a('alertSummaryPreview');

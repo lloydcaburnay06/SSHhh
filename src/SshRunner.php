@@ -1441,6 +1441,70 @@ BASH;
     }
 
     /**
+     * Snapshot of every Laravel log file that changed recently: storage/logs/laravel*.log
+     * (and shared/storage/logs for release-based deploys), modified in the last 2 days.
+     * Covers the "single" channel (laravel.log) and the "daily" channel
+     * (laravel-YYYY-MM-DD.log) in one SSH connection.
+     *
+     * @return array{project: array<string, mixed>, files: list<array{file: string, size: int, content: string, truncated: bool}>}
+     */
+    public function snapshotLaravelLogs(int $projectId, int $maxBytesPerFile = 1500000): array
+    {
+        $max = max(10000, min(5000000, $maxBytesPerFile));
+        [$ssh, $project, $cdTarget] = $this->openLogSession($projectId);
+        try {
+            $script = <<<BASH
+cd {$cdTarget} 2>/dev/null || { echo "===NODIR==="; exit 1; }
+for d in storage/logs shared/storage/logs; do
+  [ -d "\$d" ] || continue
+  find "\$d" -maxdepth 1 -type f -name 'laravel*.log' -mtime -2 2>/dev/null | sort | while IFS= read -r f; do
+    s=\$(wc -c < "\$f" | tr -d ' ')
+    if [ "\$s" -gt {$max} ]; then n={$max}; else n=\$s; fi
+    printf '===FILE===|%s|%s|%s\\n' "\$f" "\$s" "\$n"
+    head -c "\$s" "\$f" | tail -c "\$n"
+    printf '\\n===END===\\n'
+  done
+done
+echo "===DONE==="
+BASH;
+            $out = (string) $ssh->exec($this->cleanScript($script));
+            if (str_contains($out, '===NODIR===')) {
+                throw new \RuntimeException("Could not open the project folder '" . (string) $project['remote_path'] . "' on the server.");
+            }
+            if (!str_contains($out, '===DONE===')) {
+                throw new \RuntimeException('Could not list the Laravel log files on the server.');
+            }
+
+            $files = [];
+            $pos = 0;
+            while (($h = strpos($out, '===FILE===|', $pos)) !== false) {
+                $eol = strpos($out, "\n", $h);
+                if ($eol === false) {
+                    break;
+                }
+                $parts = explode('|', substr($out, $h, $eol - $h));
+                if (count($parts) !== 4) {
+                    break;
+                }
+                [, $file, $size, $n] = $parts;
+                $n = (int) $n;
+                $files[] = [
+                    'file'      => $file,
+                    'size'      => (int) $size,
+                    'content'   => substr($out, $eol + 1, $n),
+                    'truncated' => (int) $size > $n,
+                ];
+                $pos = $eol + 1 + $n + strlen("\n===END===\n");
+            }
+            return ['project' => $project, 'files' => $files];
+        } finally {
+            if ($ssh->isConnected()) {
+                $ssh->disconnect();
+            }
+        }
+    }
+
+    /**
      * Removes the first $bytes bytes of a remote log (the part already sent somewhere),
      * keeping anything written after the snapshot. Rewrites in place so the file keeps
      * its owner and permissions (Laravel must still be able to write to it).

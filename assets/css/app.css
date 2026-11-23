@@ -3523,7 +3523,7 @@ body.app-shell > .container {
 }
 
 .settings-modal {
-    max-width: 760px;
+    max-width: 880px;
     width: 94%;
 }
 
@@ -3534,6 +3534,15 @@ body.app-shell > .container {
     border-bottom: 1px solid var(--border-subtle);
     background: rgba(15, 23, 42, 0.45);
     overflow-x: auto;
+    overflow-y: hidden;
+    /* The modal is a flex column: without this, a tall tab pane squashes the tab bar
+       (overflow makes its min-height 0), clipping the labels and adding a scrollbar. */
+    flex-shrink: 0;
+    scrollbar-width: none;
+}
+
+.settings-tabs-bar::-webkit-scrollbar {
+    display: none;
 }
 
 .settings-tab-btn {
@@ -3557,6 +3566,48 @@ body.app-shell > .container {
 .settings-tab-btn.active {
     color: #a5b4fc;
     border-bottom-color: var(--accent-primary);
+}
+
+/* Checkbox rows inside a form group: keep the box next to its text
+   (.form-group label spreads "label … hint" pairs to both edges) */
+.form-group .toggle-label {
+    justify-content: flex-start;
+    font-weight: 500;
+}
+
+/* Small number box inside a sentence (e.g. "no answer in [10] min") */
+.form-control.inline-number {
+    display: inline-block;
+    width: 64px;
+    padding: 3px 6px;
+    margin: 0 2px;
+    text-align: center;
+}
+
+/* Phones & tablets: show every tab as wrapping pills instead of a sideways-scrolling strip */
+@media (max-width: 900px) {
+    .settings-tabs-bar {
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 10px 12px;
+        overflow-x: visible;
+    }
+
+    .settings-tab-btn {
+        flex: 1 1 auto;
+        padding: 7px 10px;
+        font-size: 12.5px;
+        text-align: center;
+        border: 1px solid var(--border-subtle);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.03);
+    }
+
+    .settings-tab-btn.active {
+        background: rgba(99, 102, 241, 0.18);
+        border-color: var(--accent-primary);
+        color: #c7d2fe;
+    }
 }
 
 

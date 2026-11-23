@@ -9,10 +9,10 @@ use PHPUnit\Framework\TestCase;
 
 final class AlertChannelsTest extends TestCase
 {
-    public function testSmsTextIsPlainAsciiAndAtMost160Chars(): void
+    public function testSummaryIsPlainAsciiAndAtMost160Chars(): void
     {
         $long = "**Bansay:** “Undefined array key” in OrderController — see https://example.com/x 🚨 " . str_repeat('very long detail ', 20);
-        $sms = AlertChannels::toSms($long);
+        $sms = AlertChannels::toShortText($long);
 
         self::assertLessThanOrEqual(160, strlen($sms));
         self::assertMatchesRegularExpression('/^[\x20-\x7E]+$/', $sms);
@@ -30,14 +30,6 @@ final class AlertChannelsTest extends TestCase
 
         self::assertSame('Bansay: ERROR: Undefined array key "total" (OrderController.php:42) +2 more. Open SSHhh to approve or ignore.', $s);
         self::assertLessThanOrEqual(160, strlen($s));
-    }
-
-    public function testNormalizesPhilippineMobileNumbers(): void
-    {
-        self::assertSame('639171234567', AlertChannels::normalizeNumber('0917 123 4567'));
-        self::assertSame('639171234567', AlertChannels::normalizeNumber('+63 917-123-4567'));
-        self::assertSame('639171234567', AlertChannels::normalizeNumber('9171234567'));
-        self::assertSame('', AlertChannels::normalizeNumber('02 8123 4567'));
     }
 
     public function testCleansPastedApiTokens(): void

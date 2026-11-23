@@ -24,6 +24,7 @@ final class Bootstrap
     private ?AlertChannels $alertChannels = null;
     private ?WebPush $webPush = null;
     private ?ErrorAlertManager $alerts = null;
+    private ?LogWatcher $logWatcher = null;
 
     private function __construct()
     {
@@ -176,6 +177,11 @@ final class Bootstrap
             $this->claudeSender(),
             $this->logger
         );
+    }
+
+    public function logWatcher(): LogWatcher
+    {
+        return $this->logWatcher ??= new LogWatcher($this, $this->database->pdo());
     }
 
     public function config(): array
