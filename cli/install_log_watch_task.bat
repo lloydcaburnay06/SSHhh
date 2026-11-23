@@ -5,7 +5,7 @@ setlocal
 set "PHPDIR=C:\xampp\php"
 set "PHPRUN=%PHPDIR%\php-win.exe"
 if not exist "%PHPRUN%" set "PHPRUN=%PHPDIR%\php.exe"
-set "SCRIPT=%~dp0log_watch.php"
+set "ARTISAN=%~dp0..\artisan"
 
 if not exist "%PHPDIR%\php.exe" (
     echo PHP was not found in %PHPDIR%. Edit PHPDIR at the top of this file.
@@ -13,7 +13,7 @@ if not exist "%PHPDIR%\php.exe" (
     exit /b 1
 )
 
-schtasks /Create /TN "SSHhh Log Watch" /SC MINUTE /MO 5 /TR "\"%PHPRUN%\" \"%SCRIPT%\"" /F
+schtasks /Create /TN "SSHhh Log Watch" /SC MINUTE /MO 5 /TR "\"%PHPRUN%\" \"%ARTISAN%\" sshhh:log-watch" /F
 if errorlevel 1 (
     echo.
     echo Could not create the scheduled task.
@@ -25,6 +25,6 @@ echo.
 echo Scheduled task "SSHhh Log Watch" created: runs every 5 minutes while you are signed in and checks every project log.
 echo Running one check now so you can see the result:
 echo.
-"%PHPDIR%\php.exe" "%SCRIPT%"
+"%PHPDIR%\php.exe" "%ARTISAN%" sshhh:log-watch
 echo.
 pause

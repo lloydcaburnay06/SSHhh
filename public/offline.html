@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#090d16">
+    <title>Offline — SSHhh</title>
+    <link rel="icon" type="image/svg+xml" href="assets/img/icon.svg">
+    <style>
+        /* Self-contained: the app stylesheet is a hashed build file the offline cache can't know */
+        body { margin: 0; display: flex; align-items: center; justify-content: center; min-height: 100dvh; padding: 20px; box-sizing: border-box; background: #090d16; color: #e2e8f0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+        .panel { max-width: 440px; width: 100%; padding: 28px; text-align: center; background: #111827; border: 1px solid #1f2937; border-radius: 16px; box-sizing: border-box; }
+        p { color: #94a3b8; font-size: 13.5px; margin: 0 0 20px 0; }
+        button { width: 100%; padding: 12px; font-size: 15px; font-weight: 600; color: #fff; background: #6366f1; border: 0; border-radius: 10px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div class="panel">
+        <img src="assets/img/icon.svg" alt="SSHhh" width="64" height="64" style="margin-bottom:14px; border-radius:15px;">
+        <h1 style="margin:0 0 6px 0; font-size:22px;">SSH<span style="color:#34d399; font-style:italic;">hh</span> is Offline</h1>
+        <p>Too quiet—your device doesn&rsquo;t have a network connection to reach the deployment server right now.</p>
+        <button type="button" onclick="window.location.reload();">Reconnect</button>
+    </div>
+</body>
+</html>

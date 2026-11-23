@@ -1,27 +1,37 @@
-# Composer dependencies (installed via `composer install`)
+# Dependencies
 /vendor/
+/node_modules/
 
-# Local secrets & runtime state — NEVER commit secret.key
-/storage/*
-!/storage/.htaccess
-!/storage/.gitkeep
+# Build output
+/public/build
+/public/hot
+/public/storage
 
-# Local environment & configuration overrides
+# Local secrets & runtime state — NEVER commit storage/secret.key
 .env
-.env.*
-!.env.example
-/config/config.local.php
+.env.backup
+.env.production
+/storage/*.key
+/storage/*.log
+/storage/*.lock
+/storage/*.ready
+/storage/pail
+/auth.json
 
 # Logs & temporary files
 *.log
 *.tmp
-.phpunit.cache/
+/.phpunit.cache
+.phpunit.result.cache
 
 # OS & Editor artifacts
 .DS_Store
 Thumbs.db
 Desktop.ini
-.idea/
-.vscode/
+/.idea
+/.vscode
+/.fleet
+/.zed
 *.swp
-
+.env.*
+!.env.example
