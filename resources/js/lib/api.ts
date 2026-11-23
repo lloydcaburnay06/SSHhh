@@ -4,7 +4,7 @@
  * carrying that message. 401/428 (signed out / not set up) reload the page so the
  * server can show the sign-in screen. Each function notes the pre-Laravel api.php action.
  */
-import type { DashboardStats, EventLog, EventQueryResult, ExecPacket, Project, ProjectCommand, SshProfile } from '@/types';
+import type { DashboardStats, EventLog, EventQueryResult, ExecPacket, Project, ProjectCommand, SshProfile, UserAccount } from '@/types';
 
 type Json = Record<string, unknown>;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -215,6 +215,16 @@ export const api = {
     // Claude Code link per project
     getClaudeLink: (projectId: number) => get<{ result: Any }>(`/api/projects/${projectId}/claude-link`), // get_claude_link
     saveClaudeLink: (projectId: number, data: Json) => put<{ result: Any }>(`/api/projects/${projectId}/claude-link`, data), // save_claude_link
+
+    // Super admin: user accounts (spatie roles)
+    adminListUsers: () => get<{ users: UserAccount[] }>('/api/admin/users'),
+    adminCreateUser: (data: { name: string; email: string; role: string; password?: string }) =>
+        post<{ user: UserAccount; temporary_password: string; users: UserAccount[] }>('/api/admin/users', data),
+    adminUpdateUser: (id: number, data: { name: string; email: string; role: string; is_active: boolean }) =>
+        put<{ user: UserAccount; users: UserAccount[] }>(`/api/admin/users/${id}`, data),
+    adminDeleteUser: (id: number) => del<{ users: UserAccount[] }>(`/api/admin/users/${id}`),
+    adminResetPassword: (id: number) => post<{ temporary_password: string; users: UserAccount[] }>(`/api/admin/users/${id}/reset-password`),
+    adminResetTwoFactor: (id: number) => post<{ users: UserAccount[] }>(`/api/admin/users/${id}/reset-two-factor`),
 
     /** Webhook URL to paste into GitHub / GitLab / Bitbucket. */
     webhookUrl: (token: string) => url(`/webhook/${encodeURIComponent(token)}`),

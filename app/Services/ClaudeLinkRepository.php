@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Support\Workspace;
 use InvalidArgumentException;
 use PDO;
 
@@ -21,7 +22,7 @@ final class ClaudeLinkRepository
     private const REMEMBER_SECONDS = 86400;
 
 
-    public function __construct(private PDO $pdo, private Crypto $crypto)
+    public function __construct(private PDO $pdo, private Crypto $crypto, private Workspace $workspace)
     {
     }
 
@@ -153,8 +154,9 @@ final class ClaudeLinkRepository
      */
     public function autoWatchProjectIds(): array
     {
-        $ids = $this->pdo->query("SELECT `project_id` FROM `project_claude_links` WHERE `auto_watch` = 1 AND `fire_url` <> '' AND `token_encrypted` IS NOT NULL ORDER BY `project_id`")
-            ->fetchAll(PDO::FETCH_COLUMN);
+        $stmt = $this->pdo->prepare("SELECT l.`project_id` FROM `project_claude_links` l JOIN `projects` p ON p.`id` = l.`project_id` WHERE p.`user_id` = :uid AND l.`auto_watch` = 1 AND l.`fire_url` <> '' AND l.`token_encrypted` IS NOT NULL ORDER BY l.`project_id`");
+        $stmt->execute([':uid' => $this->workspace->owner()]);
+        $ids = $stmt->fetchAll(PDO::FETCH_COLUMN);
         return array_map('intval', $ids);
     }
 
@@ -198,7 +200,7 @@ final class ClaudeLinkRepository
      */
     public function watchOverview(): array
     {
-        $rows = $this->pdo->query(<<<'SQL'
+        $stmt = $this->pdo->prepare(<<<'SQL'
             SELECT p.`id`, p.`name`, p.`environment`,
                 (l.`project_id` IS NOT NULL AND l.`fire_url` <> '' AND l.`token_encrypted` IS NOT NULL) AS `linked`,
                 COALESCE(l.`auto_watch`, 0) AS `auto_watch`,
@@ -206,8 +208,11 @@ final class ClaudeLinkRepository
                 TIMESTAMPDIFF(SECOND, l.`last_watch_at`, NOW()) AS `seconds_since_check`
             FROM `projects` p
             LEFT JOIN `project_claude_links` l ON l.`project_id` = p.`id`
+            WHERE p.`user_id` = :uid
             ORDER BY p.`name`
-        SQL)->fetchAll(PDO::FETCH_ASSOC);
+        SQL);
+        $stmt->execute([':uid' => $this->workspace->owner()]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
         return array_map(static function (array $r): array {
             $r['linked'] = (bool) $r['linked'];
             $r['auto_watch'] = (bool) $r['auto_watch'];

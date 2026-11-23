@@ -18,6 +18,11 @@ use App\Services\SshProfileRepository;
 use App\Services\SshRunner;
 use App\Services\VaultBackup;
 use App\Services\WebPush;
+use App\Support\Roles;
+use App\Support\Workspace;
+use Illuminate\Auth\SessionGuard;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\ServiceProvider;
 use PDO;
@@ -32,6 +37,8 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->singleton(PDO::class, fn () => DB::connection()->getPdo());
+        // Whose data this request works on (set by EnsureUnlocked, webhooks and CLI loops)
+        $this->app->singleton(Workspace::class);
 
         $this->app->singleton(Crypto::class, fn () => new Crypto(
             (string) config('sshhh.key_file'),
@@ -66,6 +73,13 @@ class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
-        //
+        // The super admin passes every authorization check
+        Gate::before(fn ($user) => method_exists($user, 'hasRole') && $user->hasRole(Roles::SUPER_ADMIN) ? true : null);
+
+        // "Remember this device" lasts 30 days
+        $guard = Auth::guard('web');
+        if ($guard instanceof SessionGuard) {
+            $guard->setRememberDuration(\App\Services\Authenticator::REMEMBER_DAYS * 24 * 60);
+        }
     }
 }

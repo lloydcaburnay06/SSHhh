@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Support\Workspace;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 use PDO;
@@ -15,8 +16,28 @@ final class ProjectRepository
         private PDO $pdo,
         private Crypto $crypto,
         private EventLogger $logger,
+        private Workspace $workspace,
         private ?LoginThrottle $throttle = null
     ) {
+    }
+
+    /** Owner of the current workspace: every projects query is limited to it. */
+    private function uid(): int
+    {
+        return $this->workspace->owner();
+    }
+
+    /**
+     * Throws unless the project belongs to the current workspace (guards child tables
+     * such as project_commands that are looked up by project id).
+     */
+    public function assertOwned(int $projectId): void
+    {
+        $stmt = $this->pdo->prepare('SELECT 1 FROM `projects` WHERE `id` = :id AND `user_id` = :uid LIMIT 1');
+        $stmt->execute([':id' => $projectId, ':uid' => $this->uid()]);
+        if ($stmt->fetchColumn() === false) {
+            throw new InvalidArgumentException('Project not found.');
+        }
     }
 
     /**
@@ -38,10 +59,13 @@ final class ProjectRepository
                 (SELECT COUNT(*) FROM `event_logs` e WHERE e.`project_id` = p.`id` AND e.`category` = 'deployment') AS `deployment_count`
             FROM `projects` p
             LEFT JOIN `ssh_profiles` sp ON sp.`id` = p.`ssh_profile_id`
+            WHERE p.`user_id` = :uid
             ORDER BY p.`sort_order` ASC, p.`id` DESC
         SQL;
 
-        $rows = $this->pdo->query($sql)->fetchAll();
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute([':uid' => $this->uid()]);
+        $rows = $stmt->fetchAll();
         return array_map([$this, 'sanitizeProjectRow'], $rows);
     }
 
@@ -67,7 +91,7 @@ final class ProjectRepository
 
         $allDbIds = array_map(
             'intval',
-            $this->pdo->query('SELECT `id` FROM `projects` ORDER BY `sort_order` ASC, `id` DESC')->fetchAll(PDO::FETCH_COLUMN)
+            $this->scopedColumn('SELECT `id` FROM `projects` WHERE `user_id` = :uid ORDER BY `sort_order` ASC, `id` DESC')
         );
         $existingSet = array_flip($allDbIds);
 
@@ -86,13 +110,14 @@ final class ProjectRepository
         DB::beginTransaction();
         try {
             $stmt = $this->pdo->prepare(
-                'UPDATE `projects` SET `sort_order` = :sort_order, `updated_at` = `updated_at` WHERE `id` = :id'
+                'UPDATE `projects` SET `sort_order` = :sort_order, `updated_at` = `updated_at` WHERE `id` = :id AND `user_id` = :uid'
             );
             $pos = 1;
             foreach ($finalOrder as $pid) {
                 $stmt->execute([
                     ':sort_order' => $pos++,
                     ':id'         => $pid,
+                    ':uid'        => $this->uid(),
                 ]);
             }
             DB::commit();
@@ -109,16 +134,17 @@ final class ProjectRepository
      */
     public function getDashboardStats(): array
     {
-        $totalProjects = (int) $this->pdo->query('SELECT COUNT(*) FROM `projects`')->fetchColumn();
-        $downProjects = (int) $this->pdo->query("SELECT COUNT(*) FROM `projects` WHERE `app_status` = 'down'")->fetchColumn();
-        $deployStatsStmt = $this->pdo->query(<<<'SQL'
+        $totalProjects = (int) ($this->scopedColumn('SELECT COUNT(*) FROM `projects` WHERE `user_id` = :uid')[0] ?? 0);
+        $downProjects = (int) ($this->scopedColumn("SELECT COUNT(*) FROM `projects` WHERE `user_id` = :uid AND `app_status` = 'down'")[0] ?? 0);
+        $deployStatsStmt = $this->pdo->prepare(<<<'SQL'
             SELECT
                 COUNT(*) AS `total`,
                 SUM(CASE WHEN `status` = 'success' THEN 1 ELSE 0 END) AS `succeeded`,
                 SUM(CASE WHEN `status` = 'failed' THEN 1 ELSE 0 END) AS `failed`
             FROM `event_logs`
-            WHERE `category` = 'deployment'
+            WHERE `user_id` = :uid AND `category` = 'deployment'
         SQL);
+        $deployStatsStmt->execute([':uid' => $this->uid()]);
         $dRow = $deployStatsStmt->fetch() ?: [];
 
         return [
@@ -147,11 +173,11 @@ final class ProjectRepository
                 (SELECT COUNT(*) FROM `event_logs` e WHERE e.`project_id` = p.`id` AND e.`category` = 'deployment') AS `deployment_count`
             FROM `projects` p
             LEFT JOIN `ssh_profiles` sp ON sp.`id` = p.`ssh_profile_id`
-            WHERE p.`id` = :id
+            WHERE p.`id` = :id AND p.`user_id` = :uid
             LIMIT 1
         SQL;
         $stmt = $this->pdo->prepare($sql);
-        $stmt->execute([':id' => $id]);
+        $stmt->execute([':id' => $id, ':uid' => $this->uid()]);
         $row = $stmt->fetch();
 
         return $row ? $this->sanitizeProjectRow($row) : null;
@@ -171,8 +197,8 @@ final class ProjectRepository
      */
     public function getWithDecryptedCredentials(int $id, bool $resolveLinkedProfile = true): array
     {
-        $stmt = $this->pdo->prepare('SELECT * FROM `projects` WHERE `id` = :id LIMIT 1');
-        $stmt->execute([':id' => $id]);
+        $stmt = $this->pdo->prepare('SELECT * FROM `projects` WHERE `id` = :id AND `user_id` = :uid LIMIT 1');
+        $stmt->execute([':id' => $id, ':uid' => $this->uid()]);
         $row = $stmt->fetch();
 
         if (!$row) {
@@ -187,8 +213,8 @@ final class ProjectRepository
         try {
             $profileId = isset($row['ssh_profile_id']) && $row['ssh_profile_id'] !== null ? (int) $row['ssh_profile_id'] : null;
             if ($resolveLinkedProfile && $profileId !== null && $profileId > 0) {
-                $pStmt = $this->pdo->prepare('SELECT * FROM `ssh_profiles` WHERE `id` = :pid LIMIT 1');
-                $pStmt->execute([':pid' => $profileId]);
+                $pStmt = $this->pdo->prepare('SELECT * FROM `ssh_profiles` WHERE `id` = :pid AND `user_id` = :uid LIMIT 1');
+                $pStmt->execute([':pid' => $profileId, ':uid' => $this->uid()]);
                 $prof = $pStmt->fetch();
                 if ($prof) {
                     $row['ssh_host'] = $prof['ssh_host'];
@@ -369,10 +395,11 @@ final class ProjectRepository
 
         DB::beginTransaction();
         try {
-            $nextSortOrder = (int) $this->pdo->query('SELECT COALESCE(MAX(`sort_order`), 0) FROM `projects`')->fetchColumn() + 1;
+            $nextSortOrder = (int) ($this->scopedColumn('SELECT COALESCE(MAX(`sort_order`), 0) FROM `projects` WHERE `user_id` = :uid')[0] ?? 0) + 1;
 
             $stmt = $this->pdo->prepare(<<<'SQL'
                 INSERT INTO `projects` (
+                    `user_id`,
                     `name`,
                     `environment`,
                     `sort_order`,
@@ -402,6 +429,7 @@ final class ProjectRepository
                     `shared_dirs`,
                     `shared_files`
                 ) VALUES (
+                    :uid,
                     :name,
                     :environment,
                     :sort_order,
@@ -436,6 +464,7 @@ final class ProjectRepository
             $webhookToken = bin2hex(random_bytes(24));
 
             $stmt->execute([
+                ':uid'                      => $this->uid(),
                 ':name'                     => $data['name'],
                 ':environment'              => $data['environment'],
                 ':sort_order'               => $nextSortOrder,
@@ -567,8 +596,8 @@ final class ProjectRepository
      */
     public function update(int $id, array $input): array
     {
-        $stmt = $this->pdo->prepare('SELECT * FROM `projects` WHERE `id` = :id LIMIT 1');
-        $stmt->execute([':id' => $id]);
+        $stmt = $this->pdo->prepare('SELECT * FROM `projects` WHERE `id` = :id AND `user_id` = :uid LIMIT 1');
+        $stmt->execute([':id' => $id, ':uid' => $this->uid()]);
         $existing = $stmt->fetch();
 
         if (!$existing) {
@@ -685,7 +714,7 @@ final class ProjectRepository
                 `releases_to_keep` = :releases_to_keep,
                 `shared_dirs` = :shared_dirs,
                 `shared_files` = :shared_files
-            WHERE `id` = :id
+            WHERE `id` = :id AND `user_id` = :uid
         SQL);
 
         $updStmt->execute([
@@ -716,6 +745,7 @@ final class ProjectRepository
             ':shared_dirs'              => $data['shared_dirs'],
             ':shared_files'             => $data['shared_files'],
             ':id'                        => $id,
+            ':uid'                       => $this->uid(),
         ]);
 
         // Build clean, secret-free audit diff
@@ -799,8 +829,8 @@ final class ProjectRepository
             'ssh_target'   => $target,
         ]);
 
-        $stmt = $this->pdo->prepare('DELETE FROM `projects` WHERE `id` = :id');
-        $stmt->execute([':id' => $id]);
+        $stmt = $this->pdo->prepare('DELETE FROM `projects` WHERE `id` = :id AND `user_id` = :uid');
+        $stmt->execute([':id' => $id, ':uid' => $this->uid()]);
     }
 
     /**
@@ -808,6 +838,7 @@ final class ProjectRepository
      */
     public function listCommands(int $projectId): array
     {
+        $this->assertOwned($projectId);
         $stmt = $this->pdo->prepare(<<<'SQL'
             SELECT *
             FROM `project_commands`
@@ -828,6 +859,7 @@ final class ProjectRepository
      */
     public function findCommand(int $projectId, int $commandId): ?array
     {
+        $this->assertOwned($projectId);
         $stmt = $this->pdo->prepare(<<<'SQL'
             SELECT *
             FROM `project_commands`
@@ -1093,13 +1125,14 @@ final class ProjectRepository
             SET `last_deploy_status` = :status,
                 `last_deployed_at` = :deployed_at,
                 `last_deploy_duration_ms` = :duration_ms
-            WHERE `id` = :id
+            WHERE `id` = :id AND `user_id` = :uid
         SQL);
         $stmt->execute([
             ':status'      => $status,
             ':deployed_at' => date('Y-m-d H:i:s'),
             ':duration_ms' => $durationMs,
             ':id'          => $projectId,
+            ':uid'         => $this->uid(),
         ]);
     }
 
@@ -1110,8 +1143,8 @@ final class ProjectRepository
             throw new InvalidArgumentException(sprintf('Invalid app status "%s".', $state));
         }
 
-        $stmt = $this->pdo->prepare('UPDATE `projects` SET `app_status` = :state, `app_status_updated_at` = NOW() WHERE `id` = :id');
-        $stmt->execute([':state' => $state, ':id' => $projectId]);
+        $stmt = $this->pdo->prepare('UPDATE `projects` SET `app_status` = :state, `app_status_updated_at` = NOW() WHERE `id` = :id AND `user_id` = :uid');
+        $stmt->execute([':state' => $state, ':id' => $projectId, ':uid' => $this->uid()]);
 
         $project = $this->find($projectId);
         if ($project) {
@@ -1135,25 +1168,26 @@ final class ProjectRepository
             return;
         }
         $fp = mb_substr($fingerprint, 0, 255);
-        $stmt = $this->pdo->prepare('UPDATE `projects` SET `host_fingerprint` = :fp WHERE `id` = :id');
-        $stmt->execute([':fp' => $fp, ':id' => $projectId]);
+        $stmt = $this->pdo->prepare('UPDATE `projects` SET `host_fingerprint` = :fp WHERE `id` = :id AND `user_id` = :uid');
+        $stmt->execute([':fp' => $fp, ':id' => $projectId, ':uid' => $this->uid()]);
 
-        $pStmt = $this->pdo->prepare('SELECT `ssh_profile_id` FROM `projects` WHERE `id` = :id LIMIT 1');
-        $pStmt->execute([':id' => $projectId]);
+        $pStmt = $this->pdo->prepare('SELECT `ssh_profile_id` FROM `projects` WHERE `id` = :id AND `user_id` = :uid LIMIT 1');
+        $pStmt->execute([':id' => $projectId, ':uid' => $this->uid()]);
         $profileId = (int) ($pStmt->fetchColumn() ?: 0);
         if ($profileId > 0) {
-            $this->pdo->prepare('UPDATE `ssh_profiles` SET `host_fingerprint` = :fp WHERE `id` = :pid')
-                ->execute([':fp' => $fp, ':pid' => $profileId]);
-            $this->pdo->prepare('UPDATE `projects` SET `host_fingerprint` = :fp WHERE `ssh_profile_id` = :pid')
-                ->execute([':fp' => $fp, ':pid' => $profileId]);
+            $this->pdo->prepare('UPDATE `ssh_profiles` SET `host_fingerprint` = :fp WHERE `id` = :pid AND `user_id` = :uid')
+                ->execute([':fp' => $fp, ':pid' => $profileId, ':uid' => $this->uid()]);
+            $this->pdo->prepare('UPDATE `projects` SET `host_fingerprint` = :fp WHERE `ssh_profile_id` = :pid AND `user_id` = :uid')
+                ->execute([':fp' => $fp, ':pid' => $profileId, ':uid' => $this->uid()]);
         }
     }
 
     public function regenerateWebhookToken(int $projectId): string
     {
         $token = bin2hex(random_bytes(24));
-        $stmt = $this->pdo->prepare('UPDATE `projects` SET `webhook_token` = :token WHERE `id` = :id');
-        $stmt->execute([':token' => $token, ':id' => $projectId]);
+        $this->assertOwned($projectId);
+        $stmt = $this->pdo->prepare('UPDATE `projects` SET `webhook_token` = :token WHERE `id` = :id AND `user_id` = :uid');
+        $stmt->execute([':token' => $token, ':id' => $projectId, ':uid' => $this->uid()]);
         return $token;
     }
 
@@ -1180,19 +1214,31 @@ final class ProjectRepository
                 `last_health_status` = :status,
                 `last_health_checked_at` = NOW(),
                 `last_health_response_code` = :code
-            WHERE `id` = :id
+            WHERE `id` = :id AND `user_id` = :uid
         SQL);
         $stmt->execute([
             ':status' => in_array($status, ['healthy', 'unhealthy', 'unknown'], true) ? $status : 'unknown',
             ':code'   => $responseCode,
             ':id'     => $projectId,
+            ':uid'    => $this->uid(),
         ]);
     }
 
     public function updateCurrentRelease(int $projectId, string $releaseId): void
     {
-        $stmt = $this->pdo->prepare('UPDATE `projects` SET `current_release_id` = :rel WHERE `id` = :id');
-        $stmt->execute([':rel' => mb_substr($releaseId, 0, 60), ':id' => $projectId]);
+        $stmt = $this->pdo->prepare('UPDATE `projects` SET `current_release_id` = :rel WHERE `id` = :id AND `user_id` = :uid');
+        $stmt->execute([':rel' => mb_substr($releaseId, 0, 60), ':id' => $projectId, ':uid' => $this->uid()]);
+    }
+
+    /**
+     * @return list<mixed> first column of a query that takes only :uid
+     */
+    private function scopedColumn(string $sql): array
+    {
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute([':uid' => $this->uid()]);
+
+        return $stmt->fetchAll(PDO::FETCH_COLUMN);
     }
 
     public function formatSshTarget(string $user, string $host, int $port, string $path = ''): string
@@ -1209,8 +1255,8 @@ final class ProjectRepository
         if ($profileId === null || $profileId <= 0) {
             return null;
         }
-        $stmt = $this->pdo->prepare('SELECT * FROM `ssh_profiles` WHERE `id` = :id LIMIT 1');
-        $stmt->execute([':id' => $profileId]);
+        $stmt = $this->pdo->prepare('SELECT * FROM `ssh_profiles` WHERE `id` = :id AND `user_id` = :uid LIMIT 1');
+        $stmt->execute([':id' => $profileId, ':uid' => $this->uid()]);
         $row = $stmt->fetch();
         if (!$row) {
             throw new InvalidArgumentException('Selected SSH Server Profile was not found.');

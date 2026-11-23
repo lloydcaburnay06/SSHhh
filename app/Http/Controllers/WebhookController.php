@@ -2,9 +2,11 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\User;
 use App\Services\LoginThrottle;
 use App\Services\ProjectRepository;
 use App\Services\SshRunner;
+use App\Support\Workspace;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -19,6 +21,7 @@ class WebhookController extends Controller
         ProjectRepository $projects,
         SshRunner $runner,
         LoginThrottle $throttle,
+        Workspace $workspace,
         ?string $token = null,
     ): JsonResponse {
         if (($locked = $throttle->minutesRemaining((string) $request->ip())) > 0) {
@@ -34,6 +37,13 @@ class WebhookController extends Controller
         if (! $project) {
             return response()->json(['ok' => false, 'error' => 'Invalid webhook token.'], 403);
         }
+        // The deploy runs inside the project owner's workspace (their logs, notifications)
+        $owner = User::query()->find((int) ($project['user_id'] ?? 0));
+        if ($owner === null || ! $owner->is_active) {
+            return response()->json(['ok' => false, 'error' => 'Webhooks are disabled for this project.'], 403);
+        }
+        $workspace->set($owner->id);
+
         if (empty($project['webhook_enabled'])) {
             return response()->json(['ok' => false, 'error' => 'Webhooks are disabled for this project.'], 403);
         }

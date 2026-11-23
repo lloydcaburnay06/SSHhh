@@ -34,7 +34,9 @@ export function EventItem({ event: ev, showProjectName = false }: { event: Event
     const [expanded, setExpanded] = useState(false);
     const toast = useToast();
     const steps = Array.isArray(ev.steps) ? ev.steps : [];
-    const sub = [ev.ssh_target, ev.event_type].filter(Boolean).join(' • ');
+    // A super admin acting inside someone else's workspace is named on the entry
+    const byAdmin = ev.actor_name && ev.actor_user_id && ev.user_id && ev.actor_user_id !== ev.user_id ? `by ${ev.actor_name}` : null;
+    const sub = [ev.ssh_target, ev.event_type, byAdmin].filter(Boolean).join(' • ');
     const downloadUrl = api.eventDownloadUrl(ev.id);
 
     const copyOutput = async (e: React.MouseEvent) => {

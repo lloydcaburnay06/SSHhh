@@ -108,6 +108,23 @@ Feature tests use a separate MySQL database, `ssh_deployer_testing` (see `phpuni
 
 ---
 
+## Users, Roles & Workspaces
+
+SSHhh is multi-user, with roles from [spatie/laravel-permission](https://spatie.be/docs/laravel-permission):
+
+- **Super admin** (`super-admin`): manages user accounts under **Users**, and can open any user's workspace to inspect it or act in it. A banner shows whose workspace is open, and actions taken there are logged under the admin's name. SSHhh always keeps at least one active super admin.
+- **User** (`user`): works only in their own workspace.
+
+Every user has their own **workspace**: projects, shared SSH profiles, event logs, deploy notifications, error escalation and Gemini settings, push devices, alerts and log-checker history. Nobody else sees it except a super admin.
+
+**Signing in** takes an email and password, then a code from the user's own Google Authenticator; every account must link one. "Remember this device" skips both steps for 30 days. Five failed attempts lock the IP out for 15 minutes.
+
+**First run:** open SSHhh on the computer running it (`http://localhost/deployer/`) to create the super admin. On an install upgraded from the single-user version, the super admin takes over all existing projects and settings and keeps the Google Authenticator that was already linked.
+
+**New users:** the super admin creates them under **Users**. SSHhh shows a one-time temporary password to pass on; at first sign-in the user chooses their own password and links an authenticator. Admins can also reset a password or authenticator, disable an account, or delete it along with its whole workspace.
+
+---
+
 ## Environment Configuration (`.env`)
 
 | Variable | Default | Description |

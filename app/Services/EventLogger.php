@@ -4,12 +4,32 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Support\Workspace;
 use PDO;
 
 final class EventLogger
 {
-    public function __construct(private PDO $pdo)
+    public function __construct(private PDO $pdo, private Workspace $workspace)
     {
+    }
+
+    private function uid(): int
+    {
+        return $this->workspace->owner();
+    }
+
+    /** Display name of whoever is acting (a super admin inside another workspace, or the owner). */
+    private function actorName(): ?string
+    {
+        $actor = $this->workspace->actor();
+        if ($actor === null) {
+            return null;
+        }
+        $stmt = $this->pdo->prepare('SELECT `name` FROM `users` WHERE `id` = :id');
+        $stmt->execute([':id' => $actor]);
+        $name = $stmt->fetchColumn();
+
+        return $name === false ? null : mb_substr((string) $name, 0, 150);
     }
 
     /**
@@ -38,6 +58,9 @@ final class EventLogger
 
         $stmt = $this->pdo->prepare(<<<'SQL'
             INSERT INTO `event_logs` (
+                `user_id`,
+                `actor_user_id`,
+                `actor_name`,
                 `project_id`,
                 `project_name`,
                 `category`,
@@ -52,6 +75,9 @@ final class EventLogger
                 `duration_ms`,
                 `completed_at`
             ) VALUES (
+                :user_id,
+                :actor_user_id,
+                :actor_name,
                 :project_id,
                 :project_name,
                 :category,
@@ -69,6 +95,9 @@ final class EventLogger
         SQL);
 
         $stmt->execute([
+            ':user_id'       => $this->workspace->isSet() ? $this->uid() : null,
+            ':actor_user_id' => $this->workspace->actor(),
+            ':actor_name'    => $this->actorName(),
             ':project_id'   => $data['project_id'] ?? null,
             ':project_name' => (string) ($data['project_name'] ?? ''),
             ':category'     => $data['category'],
@@ -174,19 +203,19 @@ final class EventLogger
     {
         $stmt = $this->pdo->prepare(<<<'SQL'
             SELECT * FROM `event_logs`
-            WHERE `project_id` = :pid AND `category` = 'deployment'
+            WHERE `user_id` = :uid AND `project_id` = :pid AND `category` = 'deployment'
             ORDER BY (`status` = 'running') DESC, `id` DESC
             LIMIT 1
         SQL);
-        $stmt->execute([':pid' => $projectId]);
+        $stmt->execute([':uid' => $this->uid(), ':pid' => $projectId]);
         $row = $stmt->fetch();
         return $row ? $this->hydrateRow($row) : null;
     }
 
     public function get(int $eventId): ?array
     {
-        $stmt = $this->pdo->prepare('SELECT * FROM `event_logs` WHERE `id` = :id LIMIT 1');
-        $stmt->execute([':id' => $eventId]);
+        $stmt = $this->pdo->prepare('SELECT * FROM `event_logs` WHERE `id` = :id AND `user_id` = :uid LIMIT 1');
+        $stmt->execute([':id' => $eventId, ':uid' => $this->uid()]);
         $row = $stmt->fetch();
         if (!$row) {
             return null;
@@ -201,8 +230,8 @@ final class EventLogger
      */
     public function query(?int $projectId = null, array $filters = []): array
     {
-        $where = [];
-        $params = [];
+        $where = ['`user_id` = :uid'];
+        $params = [':uid' => $this->uid()];
 
         if ($projectId !== null) {
             $where[] = '`project_id` = :project_id';
@@ -217,11 +246,11 @@ final class EventLogger
             'ssh'        => 0,
             'audit'      => 0,
         ];
-        $countWhere = $projectId !== null ? 'WHERE `project_id` = :project_id' : '';
+        $countWhere = 'WHERE `user_id` = :uid' . ($projectId !== null ? ' AND `project_id` = :project_id' : '');
         $countStmt = $this->pdo->prepare(
             "SELECT `category`, COUNT(*) AS `cnt` FROM `event_logs` {$countWhere} GROUP BY `category`"
         );
-        $countStmt->execute($projectId !== null ? [':project_id' => $projectId] : []);
+        $countStmt->execute([':uid' => $this->uid()] + ($projectId !== null ? [':project_id' => $projectId] : []));
         foreach ($countStmt->fetchAll() as $cRow) {
             $cat = (string) $cRow['category'];
             $cnt = (int) $cRow['cnt'];
@@ -280,8 +309,8 @@ final class EventLogger
 
     public function clearForProject(int $projectId, string $projectName, string $status = 'all'): int
     {
-        $sql = 'DELETE FROM `event_logs` WHERE `project_id` = :project_id';
-        $params = [':project_id' => $projectId];
+        $sql = 'DELETE FROM `event_logs` WHERE `user_id` = :uid AND `project_id` = :project_id';
+        $params = [':uid' => $this->uid(), ':project_id' => $projectId];
         if ($status === 'failed') {
             $sql .= ' AND `status` = "failed"';
         }
@@ -309,8 +338,8 @@ final class EventLogger
      */
     public function getProjectLogsExport(int $projectId, string $status = 'all'): array
     {
-        $where = ['`project_id` = :project_id'];
-        $params = [':project_id' => $projectId];
+        $where = ['`user_id` = :uid', '`project_id` = :project_id'];
+        $params = [':uid' => $this->uid(), ':project_id' => $projectId];
         if ($status === 'failed') {
             $where[] = '`status` = "failed"';
         }

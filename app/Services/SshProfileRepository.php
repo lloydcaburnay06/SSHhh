@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Support\Workspace;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 use PDO;
@@ -17,8 +18,14 @@ final class SshProfileRepository
     public function __construct(
         private PDO $pdo,
         private Crypto $crypto,
-        private EventLogger $logger
+        private EventLogger $logger,
+        private Workspace $workspace
     ) {
+    }
+
+    private function uid(): int
+    {
+        return $this->workspace->owner();
     }
 
     /**
@@ -31,9 +38,12 @@ final class SshProfileRepository
                 sp.*,
                 (SELECT COUNT(*) FROM `projects` p WHERE p.`ssh_profile_id` = sp.`id`) AS `project_count`
             FROM `ssh_profiles` sp
+            WHERE sp.`user_id` = :uid
             ORDER BY sp.`name` ASC, sp.`id` DESC
         SQL;
-        $rows = $this->pdo->query($sql)->fetchAll();
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute([':uid' => $this->uid()]);
+        $rows = $stmt->fetchAll();
         return array_map([$this, 'sanitizeRow'], $rows);
     }
 
@@ -47,10 +57,10 @@ final class SshProfileRepository
                 sp.*,
                 (SELECT COUNT(*) FROM `projects` p WHERE p.`ssh_profile_id` = sp.`id`) AS `project_count`
             FROM `ssh_profiles` sp
-            WHERE sp.`id` = :id
+            WHERE sp.`id` = :id AND sp.`user_id` = :uid
             LIMIT 1
         SQL);
-        $stmt->execute([':id' => $id]);
+        $stmt->execute([':id' => $id, ':uid' => $this->uid()]);
         $row = $stmt->fetch();
         return $row ? $this->sanitizeRow($row) : null;
     }
@@ -60,8 +70,8 @@ final class SshProfileRepository
      */
     public function getWithDecryptedCredentials(int $id): array
     {
-        $stmt = $this->pdo->prepare('SELECT * FROM `ssh_profiles` WHERE `id` = :id LIMIT 1');
-        $stmt->execute([':id' => $id]);
+        $stmt = $this->pdo->prepare('SELECT * FROM `ssh_profiles` WHERE `id` = :id AND `user_id` = :uid LIMIT 1');
+        $stmt->execute([':id' => $id, ':uid' => $this->uid()]);
         $row = $stmt->fetch();
         if (!$row) {
             throw new InvalidArgumentException('Linked SSH Server Profile not found.');
@@ -113,16 +123,17 @@ final class SshProfileRepository
 
         $stmt = $this->pdo->prepare(<<<'SQL'
             INSERT INTO `ssh_profiles` (
-                `name`, `ssh_host`, `ssh_port`, `ssh_username`, `ssh_auth_type`,
+                `user_id`, `name`, `ssh_host`, `ssh_port`, `ssh_username`, `ssh_auth_type`,
                 `ssh_password_encrypted`, `ssh_private_key_encrypted`, `ssh_passphrase_encrypted`,
                 `ssh_timeout`, `host_fingerprint`
             ) VALUES (
-                :name, :ssh_host, :ssh_port, :ssh_username, :ssh_auth_type,
+                :uid, :name, :ssh_host, :ssh_port, :ssh_username, :ssh_auth_type,
                 :ssh_password_encrypted, :ssh_private_key_encrypted, :ssh_passphrase_encrypted,
                 :ssh_timeout, :host_fingerprint
             )
         SQL);
         $stmt->execute([
+            ':uid'                       => $this->uid(),
             ':name'                      => $data['name'],
             ':ssh_host'                  => $data['ssh_host'],
             ':ssh_port'                  => $data['ssh_port'],
@@ -153,8 +164,8 @@ final class SshProfileRepository
      */
     public function update(int $id, array $input): array
     {
-        $stmt = $this->pdo->prepare('SELECT * FROM `ssh_profiles` WHERE `id` = :id LIMIT 1');
-        $stmt->execute([':id' => $id]);
+        $stmt = $this->pdo->prepare('SELECT * FROM `ssh_profiles` WHERE `id` = :id AND `user_id` = :uid LIMIT 1');
+        $stmt->execute([':id' => $id, ':uid' => $this->uid()]);
         $existing = $stmt->fetch();
         if (!$existing) {
             throw new InvalidArgumentException('SSH Profile not found.');
@@ -211,7 +222,7 @@ final class SshProfileRepository
                     `ssh_passphrase_encrypted` = :ssh_passphrase_encrypted,
                     `ssh_timeout` = :ssh_timeout,
                     `host_fingerprint` = :host_fingerprint
-                WHERE `id` = :id
+                WHERE `id` = :id AND `user_id` = :uid
             SQL);
             $upd->execute([
                 ':name'                      => $data['name'],
@@ -225,6 +236,7 @@ final class SshProfileRepository
                 ':ssh_timeout'               => $data['ssh_timeout'],
                 ':host_fingerprint'          => $fingerprint,
                 ':id'                        => $id,
+                ':uid'                       => $this->uid(),
             ]);
 
             // Sync metadata fields on linked projects for display/search consistency
@@ -236,7 +248,7 @@ final class SshProfileRepository
                     `ssh_auth_type` = :ssh_auth_type,
                     `ssh_timeout` = :ssh_timeout,
                     `host_fingerprint` = :host_fingerprint
-                WHERE `ssh_profile_id` = :profile_id
+                WHERE `ssh_profile_id` = :profile_id AND `user_id` = :uid
             SQL);
             $syncProj->execute([
                 ':ssh_host'         => $data['ssh_host'],
@@ -246,6 +258,7 @@ final class SshProfileRepository
                 ':ssh_timeout'      => $data['ssh_timeout'],
                 ':host_fingerprint' => $fingerprint,
                 ':profile_id'       => $id,
+                ':uid'              => $this->uid(),
             ]);
 
             DB::commit();
@@ -273,15 +286,15 @@ final class SshProfileRepository
         }
 
         // Before unlinking, copy encrypted credentials into any linked projects so they never lose access
-        $stmt = $this->pdo->prepare('SELECT * FROM `ssh_profiles` WHERE `id` = :id LIMIT 1');
-        $stmt->execute([':id' => $id]);
+        $stmt = $this->pdo->prepare('SELECT * FROM `ssh_profiles` WHERE `id` = :id AND `user_id` = :uid LIMIT 1');
+        $stmt->execute([':id' => $id, ':uid' => $this->uid()]);
         $rawProfile = $stmt->fetch();
 
         DB::beginTransaction();
         try {
             if ($rawProfile) {
-                $linked = $this->pdo->prepare('SELECT `id` FROM `projects` WHERE `ssh_profile_id` = :pid');
-                $linked->execute([':pid' => $id]);
+                $linked = $this->pdo->prepare('SELECT `id` FROM `projects` WHERE `ssh_profile_id` = :pid AND `user_id` = :uid');
+                $linked->execute([':pid' => $id, ':uid' => $this->uid()]);
                 $projIds = $linked->fetchAll(PDO::FETCH_COLUMN);
 
                 if ($projIds) {
@@ -314,8 +327,8 @@ final class SshProfileRepository
                 }
             }
 
-            $del = $this->pdo->prepare('DELETE FROM `ssh_profiles` WHERE `id` = :id');
-            $del->execute([':id' => $id]);
+            $del = $this->pdo->prepare('DELETE FROM `ssh_profiles` WHERE `id` = :id AND `user_id` = :uid');
+            $del->execute([':id' => $id, ':uid' => $this->uid()]);
             DB::commit();
         } catch (\Throwable $e) {
             DB::rollBack();
@@ -336,10 +349,10 @@ final class SshProfileRepository
             return;
         }
         $fp = mb_substr($fingerprint, 0, 255);
-        $this->pdo->prepare('UPDATE `ssh_profiles` SET `host_fingerprint` = :fp WHERE `id` = :id')
-            ->execute([':fp' => $fp, ':id' => $profileId]);
-        $this->pdo->prepare('UPDATE `projects` SET `host_fingerprint` = :fp WHERE `ssh_profile_id` = :pid')
-            ->execute([':fp' => $fp, ':pid' => $profileId]);
+        $this->pdo->prepare('UPDATE `ssh_profiles` SET `host_fingerprint` = :fp WHERE `id` = :id AND `user_id` = :uid')
+            ->execute([':fp' => $fp, ':id' => $profileId, ':uid' => $this->uid()]);
+        $this->pdo->prepare('UPDATE `projects` SET `host_fingerprint` = :fp WHERE `ssh_profile_id` = :pid AND `user_id` = :uid')
+            ->execute([':fp' => $fp, ':pid' => $profileId, ':uid' => $this->uid()]);
     }
 
     /**
