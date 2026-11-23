@@ -43,8 +43,9 @@ class HandleInertiaRequests extends Middleware
             'app' => [
                 'name' => config('app.name', 'SSHhh'),
                 'tagline' => config('sshhh.tagline'),
-                // Base URL of the app (it may live in a sub-folder such as /deployer)
-                'base_url' => rtrim(url('/'), '/'),
+                // Base URL of the app (it may live in a sub-folder such as /deployer). Built from the
+                // base path, not url('/'), which would include /index.php when the address had it.
+                'base_url' => $request->getSchemeAndHttpHost().$request->getBasePath(),
             ],
             'auth' => fn () => [
                 'user' => $request->user()?->toPublicArray(),

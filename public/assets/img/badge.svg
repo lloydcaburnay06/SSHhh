@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="76 76 360 360" width="96" height="96" fill="none">
+  <!-- Notification badge (Android status bar): Android draws only the alpha channel, so this is a
+       white silhouette of the logo's chevron, cursor and waveform on a transparent background.
+       Rendered to badge-96.png, which the service worker uses. -->
+  <path d="M100 182L182 256L100 330" stroke="#fff" stroke-width="44" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="172" y="306" width="86" height="34" rx="14" fill="#fff"/>
+  <path d="M214 256 H252 C258 256 261 232 266 232 C272 232 276 286 282 286 C289 286 293 196 300 196 C307 196 312 316 319 316 C326 316 331 218 338 218 C344 218 349 282 355 282 C361 282 365 242 371 242 C376 242 379 256 386 256 H426"
+        stroke="#fff" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
