@@ -4,75 +4,184 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Models\User;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Cookie;
-use PDO;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Hash;
 use Throwable;
 
 /**
- * Single-user Google Authenticator (TOTP) sign-in, ported from the pre-Laravel AccessGuard.
- * The session flag `deployer_authenticated` marks an unlocked browser; a remembered device
- * carries a random token whose SHA-256 hash is stored in `remembered_devices`.
+ * Sign-in: email + password, then the user's own Google Authenticator code.
+ *
+ * Step 1 (password) stores the user id as "pending" in the session; step 2 (TOTP code)
+ * completes the Laravel login. "Remember this device" is Laravel's remember-me cookie,
+ * so a remembered browser skips both steps for 30 days. Users without 2FA yet are
+ * signed in and then sent to the setup screen by the EnsureUnlocked middleware.
+ * Failed passwords and codes count toward the per-IP lockout (LoginThrottle).
  */
 final class Authenticator
 {
-    public const SESSION_FLAG = 'deployer_authenticated';
+    private const PENDING_USER = 'login.pending_user_id';
 
-    private const PENDING_SECRET = 'pending_totp_secret';
+    private const PENDING_REMEMBER = 'login.remember';
+
+    private const SETUP_SECRET = 'two_factor.pending_secret';
+
+    public const REMEMBER_DAYS = 30;
 
     public function __construct(
-        private PDO $pdo,
         private Crypto $crypto,
         private LoginThrottle $throttle,
     ) {
     }
 
-    public function isConfigured(): bool
+    /**
+     * Step 1. Returns an error message, or null when the password is right
+     * (the caller then checks pendingUser() / Auth::check()).
+     */
+    public function attemptPassword(Request $request, string $email, string $password, bool $remember): ?string
     {
-        try {
-            $stmt = $this->pdo->query('SELECT `is_configured` FROM `auth_state` WHERE `id` = 1 LIMIT 1');
-
-            return (bool) ($stmt ? $stmt->fetchColumn() : false);
-        } catch (Throwable) {
-            return false;
+        $ip = (string) $request->ip();
+        if (($locked = $this->throttle->minutesRemaining($ip)) > 0) {
+            return "Too many failed attempts. Try again in {$locked} minute(s).";
         }
+
+        $user = User::query()->where('email', mb_strtolower(trim($email)))->first();
+        if (! $user || ! Hash::check($password, $user->password)) {
+            $this->throttle->recordFailure($ip);
+            usleep(300_000);
+
+            return 'These credentials do not match our records.';
+        }
+        if (! $user->is_active) {
+            return 'This account is disabled. Ask the super admin to enable it.';
+        }
+
+        if ($user->hasTwoFactor()) {
+            $request->session()->put(self::PENDING_USER, $user->id);
+            $request->session()->put(self::PENDING_REMEMBER, $remember);
+
+            return null;
+        }
+
+        // No authenticator yet: sign in now, the middleware sends them to the 2FA setup
+        $this->completeLogin($request, $user, $remember);
+
+        return null;
     }
 
-    public function isAuthenticated(Request $request): bool
+    public function pendingUser(Request $request): ?User
     {
-        return (bool) $request->session()->get(self::SESSION_FLAG, false);
+        $id = $request->session()->get(self::PENDING_USER);
+
+        return $id ? User::query()->active()->find($id) : null;
     }
 
     /**
-     * Unlocks the session from a valid remembered-device cookie. Clears a stale cookie.
+     * Step 2.
+     *
+     * @return string|null error message, or null when signed in
      */
-    public function restoreFromDeviceCookie(Request $request): bool
+    public function attemptCode(Request $request, string $code): ?string
     {
-        $name = $this->cookieName();
-        $token = (string) $request->cookie($name, '');
-        if ($token === '') {
+        $user = $this->pendingUser($request);
+        if ($user === null) {
+            return 'Your sign-in expired. Please enter your email and password again.';
+        }
+        $ip = (string) $request->ip();
+        if (($locked = $this->throttle->minutesRemaining($ip)) > 0) {
+            return "Too many incorrect codes. Try again in {$locked} minute(s).";
+        }
+        if (! $this->verifyUserCode($user, $code)) {
+            $this->throttle->recordFailure($ip);
+            usleep(350_000);
+
+            return 'Invalid verification code. Please check your Google Authenticator app.';
+        }
+
+        $remember = (bool) $request->session()->pull(self::PENDING_REMEMBER, false);
+        $request->session()->forget(self::PENDING_USER);
+        $this->throttle->clear($ip);
+        $this->completeLogin($request, $user, $remember);
+
+        return null;
+    }
+
+    public function verifyUserCode(User $user, string $code): bool
+    {
+        $code = (string) preg_replace('/\s+/', '', $code);
+        if (! preg_match('/^[0-9]{6}$/', $code) || $user->two_factor_secret === null) {
             return false;
         }
-        if (strlen($token) < 32) {
-            Cookie::queue(Cookie::forget($name));
-
-            return false;
-        }
-
         try {
-            $stmt = $this->pdo->prepare('SELECT `id` FROM `remembered_devices` WHERE `token_hash` = :hash AND `expires_at` > NOW() LIMIT 1');
-            $stmt->execute([':hash' => hash('sha256', $token)]);
-            if ($stmt->fetch(PDO::FETCH_ASSOC)) {
-                $request->session()->put(self::SESSION_FLAG, true);
-
-                return true;
-            }
-            Cookie::queue(Cookie::forget($name));
+            $secret = $this->crypto->decrypt($user->two_factor_secret, 'user-totp:'.$user->id);
         } catch (Throwable) {
-            // Fail closed
+            return false;
         }
 
-        return false;
+        return $secret !== '' && Totp::verifyCode($secret, $code, 1);
+    }
+
+    /**
+     * QR code and manual key for setting up (or replacing) the signed-in user's authenticator.
+     *
+     * @return array{secret: string, secret_display: string, qr: string}
+     */
+    public function setupScreen(Request $request, User $user): array
+    {
+        $secret = $request->session()->get(self::SETUP_SECRET);
+        if (! is_string($secret) || $secret === '') {
+            $secret = Totp::generateSecret(20);
+            $request->session()->put(self::SETUP_SECRET, $secret);
+        }
+
+        return [
+            'secret' => $secret,
+            'secret_display' => trim(chunk_split($secret, 4, ' ')),
+            'qr' => Totp::getQrCodeDataUri(Totp::getProvisioningUri($secret, $user->email, (string) config('app.name', 'SSHhh'))),
+        ];
+    }
+
+    /**
+     * @return string|null error message, or null when the authenticator is now active
+     */
+    public function confirmSetup(Request $request, User $user, string $code): ?string
+    {
+        $secret = (string) $request->session()->get(self::SETUP_SECRET, '');
+        $code = (string) preg_replace('/\s+/', '', $code);
+        if ($secret === '') {
+            return 'The setup expired. Scan the new QR code and try again.';
+        }
+        if (! preg_match('/^[0-9]{6}$/', $code)) {
+            return 'Please enter a valid 6-digit verification code.';
+        }
+        if (! Totp::verifyCode($secret, $code, 1)) {
+            $this->throttle->recordFailure((string) $request->ip());
+
+            return 'Incorrect verification code. Ensure your device clock is accurate and try again.';
+        }
+
+        $this->storeSecret($user, $secret);
+        $request->session()->forget(self::SETUP_SECRET);
+
+        return null;
+    }
+
+    /** Encrypts and stores an (already verified) TOTP secret for the user. */
+    public function storeSecret(User $user, string $secret): void
+    {
+        $user->forceFill([
+            'two_factor_secret' => $this->crypto->encrypt($secret, 'user-totp:'.$user->id),
+            'two_factor_confirmed_at' => now(),
+        ])->save();
+    }
+
+    public function resetTwoFactor(User $user): void
+    {
+        $user->forceFill(['two_factor_secret' => null, 'two_factor_confirmed_at' => null])->save();
+        // Remembered browsers must go through the new authenticator
+        $user->setRememberToken(null);
+        $user->save();
     }
 
     /**
@@ -87,167 +196,18 @@ final class Authenticator
         return ! $forwarded && in_array($request->server('REMOTE_ADDR'), ['127.0.0.1', '::1'], true);
     }
 
-    /**
-     * The TOTP secret being set up in this session (generated on first view).
-     */
-    public function pendingSecret(Request $request): string
-    {
-        $secret = $request->session()->get(self::PENDING_SECRET);
-        if (! is_string($secret) || $secret === '') {
-            $secret = Totp::generateSecret(20);
-            $request->session()->put(self::PENDING_SECRET, $secret);
-        }
-
-        return $secret;
-    }
-
-    /**
-     * @return array{secret: string, secret_display: string, qr: string}
-     */
-    public function setupScreen(Request $request): array
-    {
-        $secret = $this->pendingSecret($request);
-
-        return [
-            'secret' => $secret,
-            'secret_display' => trim(chunk_split($secret, 4, ' ')),
-            'qr' => Totp::getQrCodeDataUri(Totp::getProvisioningUri($secret, 'Admin', 'SSHhh')),
-        ];
-    }
-
-    /**
-     * Verifies the first code and permanently stores the encrypted secret.
-     *
-     * @return string|null error message, or null on success
-     */
-    public function completeSetup(Request $request, string $code, bool $remember): ?string
-    {
-        $code = (string) preg_replace('/\s+/', '', $code);
-        $ip = (string) $request->ip();
-
-        if (($locked = $this->throttle->minutesRemaining($ip)) > 0) {
-            return "Too many incorrect codes. Try again in {$locked} minute(s).";
-        }
-        if (! preg_match('/^[0-9]{6}$/', $code)) {
-            return 'Please enter a valid 6-digit verification code.';
-        }
-
-        $secret = $this->pendingSecret($request);
-        if (! Totp::verifyCode($secret, $code, 1)) {
-            $this->throttle->recordFailure($ip);
-            usleep(300_000);
-
-            return 'Incorrect verification code. Ensure your device clock is accurate and try again.';
-        }
-
-        $this->pdo->prepare(<<<'SQL'
-            INSERT INTO `auth_state` (`id`, `totp_secret_encrypted`, `is_configured`, `configured_at`)
-            VALUES (1, :secret, 1, NOW())
-            ON DUPLICATE KEY UPDATE `totp_secret_encrypted` = VALUES(`totp_secret_encrypted`), `is_configured` = 1, `configured_at` = NOW()
-        SQL)->execute([':secret' => $this->crypto->encrypt($secret, 'totp-secret')]);
-
-        $request->session()->forget(self::PENDING_SECRET);
-        $this->signIn($request, $remember);
-
-        return null;
-    }
-
-    /**
-     * @return string|null error message, or null on success
-     */
-    public function attemptLogin(Request $request, string $code, bool $remember): ?string
-    {
-        $code = (string) preg_replace('/\s+/', '', $code);
-        $ip = (string) $request->ip();
-
-        if (($locked = $this->throttle->minutesRemaining($ip)) > 0) {
-            return "Too many incorrect codes. Try again in {$locked} minute(s).";
-        }
-        if (! preg_match('/^[0-9]{6}$/', $code)) {
-            return 'Please enter a valid 6-digit code.';
-        }
-
-        $stmt = $this->pdo->query('SELECT `totp_secret_encrypted` FROM `auth_state` WHERE `id` = 1 LIMIT 1');
-        $encrypted = (string) ($stmt ? $stmt->fetchColumn() : '');
-        try {
-            $secret = $this->crypto->decrypt($encrypted, 'totp-secret');
-        } catch (Throwable) {
-            return 'Security secret decryption failed. Please check master encryption key.';
-        }
-
-        if ($secret === '' || ! Totp::verifyCode($secret, $code, 1)) {
-            $this->throttle->recordFailure($ip);
-            usleep(350_000);
-
-            return 'Invalid verification code. Please check your Google Authenticator app.';
-        }
-
-        $this->throttle->clear($ip);
-        $this->signIn($request, $remember);
-
-        return null;
-    }
-
     public function logout(Request $request): void
     {
-        $name = $this->cookieName();
-        $token = (string) $request->cookie($name, '');
-        if ($token !== '') {
-            try {
-                $this->pdo->prepare('DELETE FROM `remembered_devices` WHERE `token_hash` = :hash')
-                    ->execute([':hash' => hash('sha256', $token)]);
-            } catch (Throwable) {
-            }
-        }
-        Cookie::queue(Cookie::forget($name));
-
-        $request->session()->forget(self::SESSION_FLAG);
+        Auth::guard('web')->logout();
         $request->session()->invalidate();
         $request->session()->regenerateToken();
     }
 
-    private function signIn(Request $request, bool $remember): void
+    public function completeLogin(Request $request, User $user, bool $remember): void
     {
-        $request->session()->regenerate(true);
+        Auth::guard('web')->login($user, $remember);
+        $request->session()->regenerate();
         $request->session()->regenerateToken();
-        $request->session()->put(self::SESSION_FLAG, true);
-
-        if ($remember) {
-            $this->rememberDevice($request);
-        }
-    }
-
-    private function rememberDevice(Request $request): void
-    {
-        try {
-            $days = (int) config('sshhh.auth.device_days', 30);
-            $raw = bin2hex(random_bytes(32));
-            $this->pdo->prepare(<<<'SQL'
-                INSERT INTO `remembered_devices` (`token_hash`, `user_agent`, `ip_address`, `expires_at`, `created_at`)
-                VALUES (:token_hash, :ua, :ip, DATE_ADD(NOW(), INTERVAL :days DAY), NOW())
-            SQL)->execute([
-                ':token_hash' => hash('sha256', $raw),
-                ':ua' => substr((string) $request->userAgent(), 0, 255),
-                ':ip' => substr((string) $request->ip(), 0, 60),
-                ':days' => $days,
-            ]);
-
-            Cookie::queue(cookie(
-                name: $this->cookieName(),
-                value: $raw,
-                minutes: $days * 24 * 60,
-                path: '/',
-                secure: $request->isSecure(),
-                httpOnly: true,
-                sameSite: 'lax',
-            ));
-        } catch (Throwable) {
-            // Never block a successful sign-in over the remember-me cookie
-        }
-    }
-
-    private function cookieName(): string
-    {
-        return (string) config('sshhh.auth.device_cookie', 'sshhh_device_token');
+        $user->forceFill(['last_login_at' => now(), 'last_login_ip' => substr((string) $request->ip(), 0, 60)])->save();
     }
 }

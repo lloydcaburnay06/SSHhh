@@ -106,6 +106,10 @@ export interface EventLog {
     duration_ms: number | null;
     created_at: string;
     completed_at: string | null;
+    /** Who acted, when it wasn't the workspace owner (a super admin). */
+    actor_name?: string | null;
+    actor_user_id?: number | null;
+    user_id?: number | null;
     [key: string]: unknown;
 }
 
@@ -129,14 +133,43 @@ export interface ExecPacket {
     [key: string]: unknown;
 }
 
+export type RoleName = 'super-admin' | 'user' | string;
+
+/** A user account as the server exposes it (User::toPublicArray). */
+export interface UserAccount {
+    id: number;
+    name: string;
+    email: string;
+    is_active: boolean;
+    is_super_admin: boolean;
+    roles: RoleName[];
+    two_factor_enabled: boolean;
+    must_change_password: boolean;
+    last_login_at: string | null;
+    created_at: string | null;
+    /** Only in the admin users list. */
+    project_count?: number;
+}
+
 /** Props shared with every Inertia page (HandleInertiaRequests::share). */
 export interface SharedProps {
     app: {
         name: string;
         tagline: string;
         base_url: string;
-        auth_enabled: boolean;
     };
+    auth: {
+        user: UserAccount | null;
+        can_manage_users: boolean;
+    };
+    /** The workspace in use; impersonating = a super admin inside someone else's. */
+    workspace: {
+        owner_id: number;
+        owner_name: string;
+        owner_email: string;
+        impersonating: boolean;
+    } | null;
+    flash: string | null;
     csrf_token: string;
     errors: Record<string, string>;
     [key: string]: unknown;

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Support\Workspace;
 use PDO;
 use RuntimeException;
 use Throwable;
@@ -26,8 +27,14 @@ final class ErrorAlertManager
         private AlertChannels $channels,
         private WebPush $push,
         private ClaudeLogSender $sender,
-        private EventLogger $logger
+        private EventLogger $logger,
+        private Workspace $workspace
     ) {
+    }
+
+    private function uid(): int
+    {
+        return $this->workspace->owner();
     }
 
     public function enabled(): bool
@@ -37,8 +44,8 @@ final class ErrorAlertManager
 
     public function hasPending(int $projectId): bool
     {
-        $stmt = $this->pdo->prepare("SELECT COUNT(*) FROM `error_alerts` WHERE `project_id` = :p AND `status` IN ('pending','processing')");
-        $stmt->execute([':p' => $projectId]);
+        $stmt = $this->pdo->prepare("SELECT COUNT(*) FROM `error_alerts` WHERE `user_id` = :uid AND `project_id` = :p AND `status` IN ('pending','processing')");
+        $stmt->execute([':uid' => $this->uid(), ':p' => $projectId]);
         return (int) $stmt->fetchColumn() > 0;
     }
 
@@ -50,8 +57,8 @@ final class ErrorAlertManager
      */
     public function suppressedIssues(int $projectId): array
     {
-        $stmt = $this->pdo->prepare('SELECT `issue_hashes` FROM `error_alerts` WHERE `project_id` = :p AND `created_at` > NOW() - INTERVAL 1 DAY');
-        $stmt->execute([':p' => $projectId]);
+        $stmt = $this->pdo->prepare('SELECT `issue_hashes` FROM `error_alerts` WHERE `user_id` = :uid AND `project_id` = :p AND `created_at` > NOW() - INTERVAL 1 DAY');
+        $stmt->execute([':uid' => $this->uid(), ':p' => $projectId]);
         $out = [];
         foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $json) {
             foreach ((array) json_decode((string) $json, true) as $h) {
@@ -75,10 +82,10 @@ final class ErrorAlertManager
 
         $token = bin2hex(random_bytes(24));
         $this->pdo->prepare(<<<'SQL'
-            INSERT INTO `error_alerts` (`project_id`, `project_name`, `log_file`, `summary`, `summary_source`, `issue_hashes`, `issue_count`, `status`, `token_hash`, `created_at`)
-            VALUES (:p, :n, :f, :s, :src, :h, :c, 'pending', :t, NOW())
+            INSERT INTO `error_alerts` (`user_id`, `project_id`, `project_name`, `log_file`, `summary`, `summary_source`, `issue_hashes`, `issue_count`, `status`, `token_hash`, `created_at`)
+            VALUES (:uid, :p, :n, :f, :s, :src, :h, :c, 'pending', :t, NOW())
         SQL)->execute([
-            ':p' => $projectId, ':n' => $name, ':f' => $file, ':s' => $summary['text'], ':src' => $summary['source'],
+            ':uid' => $this->uid(), ':p' => $projectId, ':n' => $name, ':f' => $file, ':s' => $summary['text'], ':src' => $summary['source'],
             ':h' => json_encode(array_column($issues, 'hash')), ':c' => count($issues), ':t' => hash('sha256', $token),
         ]);
         $id = (int) $this->pdo->lastInsertId();
@@ -119,16 +126,16 @@ final class ErrorAlertManager
         $summary = $this->channels->summarize($name, $headlines, count($issues));
 
         $this->pdo->prepare(<<<'SQL'
-            INSERT INTO `error_alerts` (`project_id`, `project_name`, `log_file`, `summary`, `summary_source`, `issue_hashes`, `issue_count`, `status`, `token_hash`, `created_at`, `decided_at`, `decided_via`)
-            VALUES (:p, :n, :f, :s, :src, :h, :c, 'notified', :t, NOW(), NOW(), 'monitor')
+            INSERT INTO `error_alerts` (`user_id`, `project_id`, `project_name`, `log_file`, `summary`, `summary_source`, `issue_hashes`, `issue_count`, `status`, `token_hash`, `created_at`, `decided_at`, `decided_via`)
+            VALUES (:uid, :p, :n, :f, :s, :src, :h, :c, 'notified', :t, NOW(), NOW(), 'monitor')
         SQL)->execute([
-            ':p' => $projectId, ':n' => $name, ':f' => $file, ':s' => $summary['text'], ':src' => $summary['source'],
+            ':uid' => $this->uid(), ':p' => $projectId, ':n' => $name, ':f' => $file, ':s' => $summary['text'], ':src' => $summary['source'],
             ':h' => json_encode(array_column($issues, 'hash')), ':c' => count($issues), ':t' => hash('sha256', random_bytes(24)),
         ]);
         $id = (int) $this->pdo->lastInsertId();
 
         try {
-            $push = self::pushSummary($this->push->sendToAll([
+            $push = self::pushSummary($this->push->sendToWorkspace([
                 'title' => "⚠️ {$name}: new error",
                 'body'  => $summary['text'],
                 'tag'   => 'sshhh-alert-' . $id,
@@ -161,6 +168,9 @@ final class ErrorAlertManager
         if (!in_array($alert['status'], ['pending'], true)) {
             return ['ok' => true, 'status' => $alert['status'], 'message' => self::statusText($alert)];
         }
+        if (!empty($alert['user_id']) && !$this->workspace->isSet()) {
+            return $this->workspace->runAs((int) $alert['user_id'], fn () => $this->decide($token, $choice, $via));
+        }
         if (!$this->claim((int) $alert['id'])) {
             $fresh = $this->get((int) $alert['id']);
             return ['ok' => true, 'status' => (string) $fresh['status'], 'message' => self::statusText($fresh)];
@@ -182,7 +192,6 @@ final class ErrorAlertManager
      */
     public function process(): array
     {
-        $cfg = $this->channels->configInternal();
         $lines = [];
 
         $stmt = $this->pdo->prepare(<<<'SQL'
@@ -192,11 +201,23 @@ final class ErrorAlertManager
         $stmt->execute();
         foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $a) {
             $id = (int) $a['id'];
+            if (empty($a['user_id'])) {
+                continue; // pre-upgrade alert that was never claimed by a user
+            }
             try {
-                if ((int) $a['age_s'] >= $cfg['push_wait_min'] * 60 && $this->claim($id)) {
-                    // No decision on the notification in time → send to Claude Code
-                    $r = $this->sendToClaude($a, 'auto_sent', 'timeout');
-                    $lines[] = "{$a['project_name']}: no response for {$cfg['push_wait_min']} min → {$r['message']}";
+                $line = $this->workspace->runAs((int) $a['user_id'], function () use ($a, $id): ?string {
+                    $cfg = $this->channels->configInternal();
+                    if ((int) $a['age_s'] >= $cfg['push_wait_min'] * 60 && $this->claim($id)) {
+                        // No decision on the notification in time → send to Claude Code
+                        $r = $this->sendToClaude($a, 'auto_sent', 'timeout');
+
+                        return "{$a['project_name']}: no response for {$cfg['push_wait_min']} min → {$r['message']}";
+                    }
+
+                    return null;
+                });
+                if ($line !== null) {
+                    $lines[] = $line;
                 }
             } catch (Throwable $e) {
                 $lines[] = "{$a['project_name']}: alert #{$id} error: " . $e->getMessage();
@@ -214,8 +235,9 @@ final class ErrorAlertManager
     public function recent(int $limit = 15): array
     {
         $limit = max(1, min(100, $limit));
-        $rows = $this->pdo->query("SELECT `id`, `project_id`, `project_name`, `summary`, `summary_source`, `issue_count`, `status`, `created_at`, `push_result`, `decided_at`, `decided_via`, `session_url`, `error` FROM `error_alerts` ORDER BY `id` DESC LIMIT {$limit}")
-            ->fetchAll(PDO::FETCH_ASSOC);
+        $stmt = $this->pdo->prepare("SELECT `id`, `project_id`, `project_name`, `summary`, `summary_source`, `issue_count`, `status`, `created_at`, `push_result`, `decided_at`, `decided_via`, `session_url`, `error` FROM `error_alerts` WHERE `user_id` = :uid ORDER BY `id` DESC LIMIT {$limit}");
+        $stmt->execute([':uid' => $this->uid()]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
         return $rows;
     }
 
@@ -243,7 +265,7 @@ final class ErrorAlertManager
     /** Push a test notification to every registered device. */
     public function sendTestPush(): string
     {
-        $r = $this->push->sendToAll([
+        $r = $this->push->sendToWorkspace([
             'title' => '🔔 SSHhh test notification',
             'body'  => 'Push notifications work on this device.',
             'tag'   => 'sshhh-test',
@@ -290,7 +312,7 @@ final class ErrorAlertManager
                 ];
                 $payload['requireInteraction'] = true;
             }
-            return self::pushSummary($this->push->sendToAll($payload));
+            return self::pushSummary($this->push->sendToWorkspace($payload));
         } catch (Throwable $e) {
             return 'Push failed: ' . $e->getMessage();
         }

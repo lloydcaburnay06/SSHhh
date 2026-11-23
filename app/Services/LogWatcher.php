@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Support\Workspace;
 use PDO;
 use Throwable;
 
@@ -29,18 +30,88 @@ final class LogWatcher
         private ClaudeLinkRepository $links,
         private ClaudeLogSender $claudeSender,
         private ErrorAlertManager $alerts,
+        private Workspace $workspace,
     ) {
+    }
+
+    /**
+     * One check. Inside a workspace ("Run check now") only that user's projects are checked.
+     * Outside one (the scheduled task) pending alert timers are advanced first, then every
+     * active user's projects are checked in that user's own workspace, each run recorded
+     * separately so a user only ever sees their own history.
+     *
+     * @param callable(string): void|null $out receives each log line as it happens
+     * @return array<string, mixed> the recorded run (or the totals of all of them)
+     */
+    public function run(string $trigger, ?int $onlyProject = null, bool $force = false, ?callable $out = null): array
+    {
+        if ($this->workspace->isSet()) {
+            return $this->runForWorkspace($trigger, $onlyProject, $force, $out);
+        }
+
+        $say = static function (string $line) use ($out): void {
+            if ($out !== null) {
+                $out($line);
+            }
+        };
+        $totals = ['id' => null, 'status' => 'ok', 'summary' => '', 'duration_ms' => 0, 'lines' => [], 'watched' => 0, 'checked' => 0, 'alerts' => 0, 'sent' => 0, 'errors' => 0];
+
+        // 1) Escalation timers (no decision on a notification in time → Claude), for every user
+        try {
+            foreach ($this->alerts->process() as $line) {
+                $say('⏱ ' . $line);
+                if (str_contains($line, 'Sent ')) {
+                    $totals['sent']++;
+                }
+            }
+        } catch (Throwable $e) {
+            $totals['errors']++;
+            $say('❌ Alert timers failed: ' . $e->getMessage());
+        }
+
+        // 2) Each active user's projects, in that user's workspace
+        if ($onlyProject !== null) {
+            $stmt = $this->pdo->prepare('SELECT `user_id` FROM `projects` WHERE `id` = :id');
+            $stmt->execute([':id' => $onlyProject]);
+            $owners = array_filter([(int) $stmt->fetchColumn()]);
+        } else {
+            $owners = array_map('intval', $this->pdo->query(
+                'SELECT DISTINCT p.`user_id` FROM `projects` p JOIN `users` u ON u.`id` = p.`user_id` WHERE u.`is_active` = 1 ORDER BY p.`user_id`'
+            )->fetchAll(PDO::FETCH_COLUMN));
+        }
+
+        if ($owners === []) {
+            // Still record the run, so Settings → Log Checker can tell the task is alive
+            $this->pdo->prepare("INSERT INTO `log_watch_runs` (`user_id`, `started_at`, `finished_at`, `trigger_type`, `status`, `summary`) VALUES (NULL, NOW(), NOW(), :t, 'ok', 'No projects yet.')")
+                ->execute([':t' => $trigger]);
+            $say('No projects yet.');
+
+            return $totals;
+        }
+
+        foreach ($owners as $ownerId) {
+            $r = $this->workspace->runAs($ownerId, fn () => $this->runForWorkspace($trigger, $onlyProject, $force, $out));
+            foreach (['watched', 'checked', 'alerts', 'sent', 'errors'] as $k) {
+                $totals[$k] += $r[$k];
+            }
+            $totals['lines'] = [...$totals['lines'], ...$r['lines']];
+            if ($r['status'] === 'error') {
+                $totals['status'] = 'error';
+            }
+        }
+
+        return $totals;
     }
 
     /**
      * @param callable(string): void|null $out receives each log line as it happens
      * @return array<string, mixed> the recorded run
      */
-    public function run(string $trigger, ?int $onlyProject = null, bool $force = false, ?callable $out = null): array
+    private function runForWorkspace(string $trigger, ?int $onlyProject, bool $force, ?callable $out): array
     {
         $started = microtime(true);
-        $this->pdo->prepare("INSERT INTO `log_watch_runs` (`started_at`, `trigger_type`, `status`) VALUES (NOW(), :t, 'running')")
-            ->execute([':t' => $trigger]);
+        $this->pdo->prepare("INSERT INTO `log_watch_runs` (`user_id`, `started_at`, `trigger_type`, `status`) VALUES (:uid, NOW(), :t, 'running')")
+            ->execute([':uid' => $this->workspace->owner(), ':t' => $trigger]);
         $runId = (int) $this->pdo->lastInsertId();
 
         $lines = [];
@@ -58,15 +129,7 @@ final class LogWatcher
             $links = $this->links;
             $escalate = $alerts->enabled();
 
-            // 1) Escalation timers (no decision on a notification in time → Claude)
-            foreach ($alerts->process() as $line) {
-                $say('⏱ ' . $line);
-                if (str_contains($line, 'Sent ')) {
-                    $stats['sent']++;
-                }
-            }
-
-            // 2) Log checks: every project
+            // Log checks: every project in this workspace
             $projects = $this->projects->listAll();
             if ($onlyProject !== null) {
                 $projects = array_values(array_filter($projects, static fn(array $p): bool => (int) $p['id'] === $onlyProject));
@@ -169,11 +232,14 @@ final class LogWatcher
         };
 
         $limit = max(5, min(200, $runLimit));
-        $runs = $this->pdo->query("SELECT `id`, `started_at`, `trigger_type`, `status`, `duration_ms`, `projects_watched`, `projects_checked`, `alerts`, `sent`, `errors`, `summary`, `details` FROM `log_watch_runs` ORDER BY `id` DESC LIMIT {$limit}")
-            ->fetchAll(PDO::FETCH_ASSOC);
+        $uid = [':uid' => $this->workspace->owner()];
+        $runsStmt = $this->pdo->prepare("SELECT `id`, `started_at`, `trigger_type`, `status`, `duration_ms`, `projects_watched`, `projects_checked`, `alerts`, `sent`, `errors`, `summary`, `details` FROM `log_watch_runs` WHERE `user_id` = :uid ORDER BY `id` DESC LIMIT {$limit}");
+        $runsStmt->execute($uid);
+        $runs = $runsStmt->fetchAll(PDO::FETCH_ASSOC);
 
-        $today = $this->pdo->query("SELECT COUNT(*) AS `runs`, COALESCE(SUM(`projects_checked`),0) AS `checks`, COALESCE(SUM(`alerts`),0) AS `alerts`, COALESCE(SUM(`sent`),0) AS `sent`, COALESCE(SUM(`errors`),0) AS `errors` FROM `log_watch_runs` WHERE `started_at` > NOW() - INTERVAL 1 DAY")
-            ->fetch(PDO::FETCH_ASSOC);
+        $todayStmt = $this->pdo->prepare("SELECT COUNT(*) AS `runs`, COALESCE(SUM(`projects_checked`),0) AS `checks`, COALESCE(SUM(`alerts`),0) AS `alerts`, COALESCE(SUM(`sent`),0) AS `sent`, COALESCE(SUM(`errors`),0) AS `errors` FROM `log_watch_runs` WHERE `user_id` = :uid AND `started_at` > NOW() - INTERVAL 1 DAY");
+        $todayStmt->execute($uid);
+        $today = $todayStmt->fetch(PDO::FETCH_ASSOC);
 
         return [
             'health'   => $health,

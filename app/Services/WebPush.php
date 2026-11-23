@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Support\Workspace;
 use PDO;
 use RuntimeException;
 use Throwable;
@@ -17,8 +18,13 @@ final class WebPush
     private const P256_SPKI_PREFIX = '3059301306072a8648ce3d020106082a8648ce3d030107034200';
 
 
-    public function __construct(private PDO $pdo, private SettingsRepository $settings)
+    public function __construct(private PDO $pdo, private SettingsRepository $settings, private Workspace $workspace)
     {
+    }
+
+    private function uid(): int
+    {
+        return $this->workspace->owner();
     }
 
     /** Public VAPID key (base64url, uncompressed P-256 point) for PushManager.subscribe(). */
@@ -40,10 +46,11 @@ final class WebPush
             throw new \InvalidArgumentException('Invalid push subscription from the browser.');
         }
         $this->pdo->prepare(<<<'SQL'
-            INSERT INTO `push_subscriptions` (`endpoint_hash`, `endpoint`, `p256dh`, `auth`, `user_agent`, `created_at`)
-            VALUES (:h, :e, :p, :a, :ua, NOW())
-            ON DUPLICATE KEY UPDATE `p256dh` = VALUES(`p256dh`), `auth` = VALUES(`auth`), `user_agent` = VALUES(`user_agent`), `fail_count` = 0
+            INSERT INTO `push_subscriptions` (`user_id`, `endpoint_hash`, `endpoint`, `p256dh`, `auth`, `user_agent`, `created_at`)
+            VALUES (:uid, :h, :e, :p, :a, :ua, NOW())
+            ON DUPLICATE KEY UPDATE `user_id` = VALUES(`user_id`), `p256dh` = VALUES(`p256dh`), `auth` = VALUES(`auth`), `user_agent` = VALUES(`user_agent`), `fail_count` = 0
         SQL)->execute([
+            ':uid' => $this->uid(),
             ':h' => hash('sha256', $endpoint), ':e' => $endpoint, ':p' => $p256dh, ':a' => $auth,
             ':ua' => mb_substr($userAgent, 0, 255),
         ]);
@@ -51,7 +58,7 @@ final class WebPush
 
     public function removeSubscription(string $endpoint): void
     {
-        $this->pdo->prepare('DELETE FROM `push_subscriptions` WHERE `endpoint_hash` = :h')->execute([':h' => hash('sha256', $endpoint)]);
+        $this->pdo->prepare('DELETE FROM `push_subscriptions` WHERE `endpoint_hash` = :h AND `user_id` = :uid')->execute([':h' => hash('sha256', $endpoint), ':uid' => $this->uid()]);
     }
 
     /**
@@ -59,7 +66,9 @@ final class WebPush
      */
     public function listDevices(): array
     {
-        $rows = $this->pdo->query('SELECT `id`, `user_agent`, `created_at`, `last_ok_at` FROM `push_subscriptions` ORDER BY `id`')->fetchAll(PDO::FETCH_ASSOC);
+        $stmt = $this->pdo->prepare('SELECT `id`, `user_agent`, `created_at`, `last_ok_at` FROM `push_subscriptions` WHERE `user_id` = :uid ORDER BY `id`');
+        $stmt->execute([':uid' => $this->uid()]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
         return array_map(static fn(array $r): array => [
             'id'         => (int) $r['id'],
             'device'     => self::describeAgent((string) $r['user_agent']),
@@ -70,7 +79,7 @@ final class WebPush
 
     public function removeDevice(int $id): void
     {
-        $this->pdo->prepare('DELETE FROM `push_subscriptions` WHERE `id` = :id')->execute([':id' => $id]);
+        $this->pdo->prepare('DELETE FROM `push_subscriptions` WHERE `id` = :id AND `user_id` = :uid')->execute([':id' => $id, ':uid' => $this->uid()]);
     }
 
     /**
@@ -79,13 +88,15 @@ final class WebPush
      * @param array<string, mixed> $payload
      * @return array{sent: int, failed: int, removed: int, errors: list<string>}
      */
-    public function sendToAll(array $payload, int $ttlSeconds = 1200): array
+    public function sendToWorkspace(array $payload, int $ttlSeconds = 1200): array
     {
         $this->ensureKeys();
         $json = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
         $out = ['sent' => 0, 'failed' => 0, 'removed' => 0, 'errors' => []];
 
-        foreach ($this->pdo->query('SELECT * FROM `push_subscriptions`')->fetchAll(PDO::FETCH_ASSOC) as $sub) {
+        $subs = $this->pdo->prepare('SELECT * FROM `push_subscriptions` WHERE `user_id` = :uid');
+        $subs->execute([':uid' => $this->uid()]);
+        foreach ($subs->fetchAll(PDO::FETCH_ASSOC) as $sub) {
             try {
                 $code = $this->sendOne((string) $sub['endpoint'], (string) $sub['p256dh'], (string) $sub['auth'], (string) $json, $ttlSeconds);
                 if ($code >= 200 && $code < 300) {

@@ -1,89 +1,62 @@
 import { Head, useForm } from '@inertiajs/react';
-import { type FormEvent, useState } from 'react';
+import type { FormEvent } from 'react';
+import { AuthCard, ErrorBanner, Field, submitStyle } from '@/components/auth';
 import { url } from '@/lib/api';
-import { copyText } from '@/lib/format';
-import { AuthBrand, CodeInput, useAuthBodyClass } from './login';
 
-export default function Setup({ secret, secret_display, qr }: { secret: string; secret_display: string; qr: string }) {
-    useAuthBodyClass();
-    const form = useForm({ code: '', remember_device: true });
-    const [copied, setCopied] = useState(false);
+/**
+ * First run (localhost only): create the super admin. On an upgraded install the
+ * super admin takes over the existing projects and keeps the linked authenticator.
+ */
+export default function Setup({ keeps_authenticator }: { keeps_authenticator: boolean }) {
+    const form = useForm({ name: '', email: '', password: '', password_confirmation: '' });
 
     const submit = (e: FormEvent) => {
         e.preventDefault();
         form.post(url('/setup'), { preserveScroll: true });
     };
 
-    const copy = async () => {
-        if (await copyText(secret)) {
-            setCopied(true);
-            window.setTimeout(() => setCopied(false), 2000);
-        }
-    };
+    const firstError = Object.values(form.errors)[0];
 
     return (
-        <div className="totp-auth-container">
-            <Head title="Authenticator Setup" />
-            <AuthBrand marginBottom={16} />
+        <AuthCard
+            title="Create the super admin"
+            badge="Initial Setup"
+            maxWidth={460}
+            subtitle="This account manages every other SSHhh user and can open any user's workspace."
+        >
+            <Head title="Setup" />
+            <ErrorBanner message={firstError} />
+            <form method="post" className="totp-form" onSubmit={submit}>
+                <Field label="Your name" value={form.data.name} onChange={(v) => form.setData('name', v)} autoComplete="name" autoFocus />
+                <Field label="Email" type="email" value={form.data.email} onChange={(v) => form.setData('email', v)} autoComplete="username" />
+                <Field label="Password (at least 10 characters)" type="password" value={form.data.password} onChange={(v) => form.setData('password', v)} autoComplete="new-password" />
+                <Field
+                    label="Confirm password"
+                    type="password"
+                    value={form.data.password_confirmation}
+                    onChange={(v) => form.setData('password_confirmation', v)}
+                    autoComplete="new-password"
+                />
+                <button type="submit" className="btn btn-primary btn-lg" style={submitStyle} disabled={form.processing}>
+                    {form.processing ? 'Creating...' : 'Create super admin'}
+                </button>
+            </form>
 
-            <div className="panel totp-card">
-                <div className="totp-card-header">
-                    <span className="badge badge-totp-setup">Initial Setup</span>
-                    <h1 className="totp-heading">Google Authenticator</h1>
-                    <p className="totp-subheading">Link your mobile phone to unlock SSHhh securely without needing passwords.</p>
-                </div>
-
-                {form.errors.code && (
-                    <div className="ssh-test-banner show err" style={{ marginBottom: 16, fontFamily: 'var(--font-sans)' }}>
-                        {form.errors.code}
-                    </div>
-                )}
-
-                <div className="totp-step-box">
-                    <div className="totp-step-title">
-                        <span className="totp-step-num">1</span>
-                        <span>Scan this QR code with Google Authenticator</span>
-                    </div>
-                    <div className="totp-qr-wrapper">
-                        <img src={qr} alt="Scan with Google Authenticator" className="totp-qr-img" width={180} height={180} />
-                    </div>
-                    <div className="totp-manual-fallback">
-                        <span className="totp-manual-label">Can't scan? Enter this key manually:</span>
-                        <div className="totp-secret-row">
-                            <code className="totp-secret-code">{secret_display}</code>
-                            <button type="button" className="btn btn-secondary btn-sm" onClick={copy}>
-                                {copied ? 'Copied!' : 'Copy'}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-
-                <form method="post" autoComplete="off" className="totp-form" onSubmit={submit}>
-                    <div className="totp-step-title" style={{ marginTop: 16, marginBottom: 8 }}>
-                        <span className="totp-step-num">2</span>
-                        <span>Enter the 6-digit code from your phone</span>
-                    </div>
-                    <div className="form-group" style={{ marginBottom: 14 }}>
-                        <CodeInput value={form.data.code} onChange={(v) => form.setData('code', v)} />
-                    </div>
-
-                    <label className="remember-device-toggle">
-                        <input type="checkbox" checked={form.data.remember_device} onChange={(e) => form.setData('remember_device', e.target.checked)} />
-                        <span>Remember this device for 30 days</span>
-                    </label>
-
-                    <button type="submit" className="btn btn-primary btn-lg" style={{ width: '100%', justifyContent: 'center', marginTop: 14 }} disabled={form.processing}>
-                        {form.processing ? 'Activating...' : 'Verify & Activate Authenticator'}
-                    </button>
-                </form>
-
-                <div className="totp-lockout-notice">
-                    <span className="totp-lockout-icon">&#128274;</span>
-                    <span>
-                        <strong>One-Time Setup:</strong> Once verified, this setup screen and secret key will never be shown again.
-                    </span>
-                </div>
+            <div className="totp-lockout-notice">
+                <span className="totp-lockout-icon">&#128274;</span>
+                <span>
+                    {keeps_authenticator ? (
+                        <>
+                            <strong>Upgrading:</strong> your existing projects, settings and logs become this account&rsquo;s workspace, and you keep signing in with
+                            the Google Authenticator you already linked.
+                        </>
+                    ) : (
+                        <>
+                            <strong>Next:</strong> you&rsquo;ll link Google Authenticator. Every account signs in with a password plus its own authenticator code.
+                        </>
+                    )}
+                </span>
             </div>
-        </div>
+        </AuthCard>
     );
 }

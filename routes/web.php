@@ -1,11 +1,14 @@
 <?php
 
+use App\Http\Controllers\Admin\UserController;
 use App\Http\Controllers\AlertController;
 use App\Http\Controllers\Api;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\LegacyController;
 use App\Http\Controllers\PageController;
+use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\WebhookController;
+use App\Support\Roles;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -14,11 +17,15 @@ use Illuminate\Support\Facades\Route;
 |--------------------------------------------------------------------------
 */
 
+// First run (localhost only, until the super admin exists)
 Route::get('/setup', [AuthController::class, 'showSetup'])->name('setup');
 Route::post('/setup', [AuthController::class, 'setup'])->middleware('throttle:20,1');
+
+// Sign-in: email + password, then the user's Google Authenticator code
 Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
 Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:20,1');
-Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
+Route::get('/two-factor/challenge', [AuthController::class, 'showChallenge'])->name('two-factor.challenge');
+Route::post('/two-factor/challenge', [AuthController::class, 'challenge'])->middleware('throttle:20,1');
 
 // Git push webhooks: authenticated by the per-project token
 Route::match(['get', 'post'], '/webhook/{token?}', WebhookController::class)->name('webhook');
@@ -40,6 +47,33 @@ Route::get('/project.php', fn () => redirect()->route('projects.show', ['project
 */
 
 Route::middleware('unlocked')->group(function () {
+    // Reachable before onboarding is finished (EnsureUnlocked::ONBOARDING_ROUTES)
+    Route::get('/two-factor/setup', [AuthController::class, 'showTwoFactorSetup'])->name('two-factor.setup');
+    Route::post('/two-factor/setup', [AuthController::class, 'confirmTwoFactor'])->name('two-factor.confirm');
+    Route::get('/password/change', [AuthController::class, 'showPasswordChange'])->name('password.change');
+    Route::put('/password', [AuthController::class, 'updatePassword'])->name('password.update');
+    Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
+
+    // Own account
+    Route::get('/profile', [ProfileController::class, 'show'])->name('profile');
+    Route::put('/profile', [ProfileController::class, 'update'])->name('profile.update');
+    Route::post('/profile/two-factor', [ProfileController::class, 'replaceTwoFactor'])->name('profile.two-factor');
+
+    // Super admin: user accounts and other users' workspaces
+    Route::middleware('permission:'.Roles::MANAGE_USERS)->prefix('admin')->group(function () {
+        Route::get('users', [UserController::class, 'page'])->name('admin.users');
+        Route::post('workspace/{user}', [UserController::class, 'enterWorkspace'])->whereNumber('user')->name('admin.workspace.enter');
+        Route::delete('workspace', [UserController::class, 'leaveWorkspace'])->name('admin.workspace.leave');
+    });
+    Route::middleware('permission:'.Roles::MANAGE_USERS)->prefix('api/admin')->group(function () {
+        Route::get('users', [UserController::class, 'index']);
+        Route::post('users', [UserController::class, 'store']);
+        Route::put('users/{user}', [UserController::class, 'update'])->whereNumber('user');
+        Route::delete('users/{user}', [UserController::class, 'destroy'])->whereNumber('user');
+        Route::post('users/{user}/reset-password', [UserController::class, 'resetPassword'])->whereNumber('user');
+        Route::post('users/{user}/reset-two-factor', [UserController::class, 'resetTwoFactor'])->whereNumber('user');
+    });
+
     Route::get('/', [PageController::class, 'dashboard'])->name('dashboard');
     Route::get('/projects/{project}', [PageController::class, 'project'])->whereNumber('project')->name('projects.show');
 

@@ -2,6 +2,7 @@
 
 use App\Http\Middleware\EnsureUnlocked;
 use App\Http\Middleware\HandleInertiaRequests;
+use App\Http\Middleware\StripIndexPhp;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -15,12 +16,16 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        $middleware->prepend(StripIndexPhp::class);
+
         $middleware->web(append: [
             HandleInertiaRequests::class,
         ]);
 
         $middleware->alias([
             'unlocked' => EnsureUnlocked::class,
+            'role' => \Spatie\Permission\Middleware\RoleMiddleware::class,
+            'permission' => \Spatie\Permission\Middleware\PermissionMiddleware::class,
         ]);
 
         // Token-authenticated endpoints called by Git hosts and the service worker
@@ -29,11 +34,6 @@ return Application::configure(basePath: dirname(__DIR__))
             'webhook/*',
             'alert/decide',
             'api.php',
-        ]);
-
-        // The remembered-device cookie predates Laravel: keep it readable as a raw value
-        $middleware->encryptCookies(except: [
-            'sshhh_device_token',
         ]);
 
         // Honour X-Forwarded-Proto from tunnels (secure cookies, push needs https),

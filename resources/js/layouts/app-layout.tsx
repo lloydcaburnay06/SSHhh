@@ -19,6 +19,8 @@ export default function AppLayout({ title, children }: { title: string; children
             <ModalsProvider>
                 <Head title={title} />
                 <Topbar />
+                <WorkspaceBanner />
+                <FlashToast />
                 {children}
                 <StandaloneNavigationTrap />
             </ModalsProvider>
@@ -33,7 +35,7 @@ export function useBodyClass(className: string): void {
 }
 
 function Topbar() {
-    const { app } = usePage<SharedProps>().props;
+    const { app, auth } = usePage<SharedProps>().props;
     const { openSettingsModal } = useModals();
     const toast = useToast();
     const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
@@ -97,15 +99,54 @@ function Topbar() {
                         <span>&#9881;&#65039;</span>
                         <span className="hide-xs">Settings</span>
                     </button>
-                    {app.auth_enabled && (
-                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => router.post(url('/logout'))}>
-                            Sign Out
-                        </button>
+                    {auth.can_manage_users && (
+                        <Link href={url('/admin/users')} className="btn btn-secondary btn-sm" title="User accounts & workspaces">
+                            <span>&#128101;</span>
+                            <span className="hide-xs">Users</span>
+                        </Link>
                     )}
+                    {auth.user && (
+                        <Link href={url('/profile')} className="btn btn-ghost btn-sm" title={`Signed in as ${auth.user.email}`}>
+                            <span>&#128100;</span>
+                            <span className="hide-xs">{auth.user.name}</span>
+                        </Link>
+                    )}
+                    <button type="button" className="btn btn-ghost btn-sm" title="Sign out" onClick={() => router.post(url('/logout'))}>
+                        <span className="show-xs" aria-hidden="true">&#x23FB;</span>
+                        <span className="hide-xs">Sign Out</span>
+                    </button>
                 </div>
             </div>
         </header>
     );
+}
+
+/** Shown while a super admin works inside another user's workspace. */
+function WorkspaceBanner() {
+    const { workspace } = usePage<SharedProps>().props;
+    if (!workspace?.impersonating) return null;
+
+    return (
+        <div className="workspace-banner" role="status">
+            <span>
+                &#128065; Viewing <strong>{workspace.owner_name}</strong>&rsquo;s workspace ({workspace.owner_email}). Changes you make here are logged under your
+                name.
+            </span>
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => router.delete(url('/admin/workspace'))}>
+                Back to my workspace
+            </button>
+        </div>
+    );
+}
+
+/** One-off success messages from the server (session flash). */
+function FlashToast() {
+    const { flash } = usePage<SharedProps>().props;
+    const toast = useToast();
+    useEffect(() => {
+        if (flash) toast(flash, 'success');
+    }, [flash, toast]);
+    return null;
 }
 
 let swRegistered = false;

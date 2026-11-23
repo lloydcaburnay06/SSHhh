@@ -1,4 +1,4 @@
-const CACHE_NAME = 'sshhh-pwa-v2.0.0';
+const CACHE_NAME = 'sshhh-pwa-v2.1.0';
 const PRECACHE_ASSETS = [
     './offline.html',
     './manifest.webmanifest',
@@ -7,7 +7,8 @@ const PRECACHE_ASSETS = [
     './assets/img/icon-192.png',
     './assets/img/icon-512.png',
     './assets/img/apple-touch-icon.png',
-    './assets/img/favicon-32.png'
+    './assets/img/favicon-32.png',
+    './assets/img/badge-96.png'
 ];
 
 self.addEventListener('install', (event) => {
@@ -99,7 +100,8 @@ self.addEventListener('push', (event) => {
         renotify: true,
         requireInteraction: !!data.requireInteraction,
         icon: './assets/img/icon-192.png',
-        badge: './assets/img/favicon-32.png',
+        // Android draws the badge from its alpha channel only: it must be a transparent silhouette
+        badge: './assets/img/badge-96.png',
         data: { url: data.url || './', token: data.token || null },
         actions: Array.isArray(data.actions) ? data.actions : []
     };
@@ -121,10 +123,10 @@ self.addEventListener('notificationclick', (event) => {
                 .then((res) => res.json())
                 .then((r) => self.registration.showNotification(
                     event.action === 'proceed' ? (r.ok ? '🤖 Sent to Claude Code' : '❌ Could not send to Claude') : 'Alert ignored',
-                    { body: r.message || r.error || '', tag: n.tag, icon: './assets/img/icon-192.png', data: { url: r.session_url || d.url } }
+                    { body: r.message || r.error || '', tag: n.tag, icon: './assets/img/icon-192.png', badge: './assets/img/badge-96.png', data: { url: r.session_url || d.url } }
                 ))
                 .catch(() => self.registration.showNotification('Could not reach SSHhh', {
-                    body: 'Open the alert to choose again.', tag: n.tag, data: { url: d.url }
+                    body: 'Open the alert to choose again.', tag: n.tag, icon: './assets/img/icon-192.png', badge: './assets/img/badge-96.png', data: { url: d.url }
                 }))
         );
         return;

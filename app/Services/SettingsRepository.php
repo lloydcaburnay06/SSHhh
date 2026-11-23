@@ -4,24 +4,36 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Support\Workspace;
 use InvalidArgumentException;
 use PDO;
 
 /**
- * Manages encrypted and plain application-wide settings (e.g., outbound notifications).
+ * Encrypted and plain settings. Each user has their own (notifications, alert channels,
+ * Gemini key, …); a few keys belong to the installation itself and are stored with
+ * user_id 0 (the server's Web Push VAPID key pair).
  */
 final class SettingsRepository
 {
     public function __construct(
         private PDO $pdo,
-        private Crypto $crypto
+        private Crypto $crypto,
+        private Workspace $workspace
     ) {
+    }
+
+    /** Installation-wide keys, shared by every user. */
+    public const GLOBAL_KEYS = ['push_vapid_public', 'push_vapid_private_pem'];
+
+    private function scopeFor(string $key): int
+    {
+        return in_array($key, self::GLOBAL_KEYS, true) ? 0 : $this->workspace->owner();
     }
 
     public function get(string $key, ?string $default = null): ?string
     {
-        $stmt = $this->pdo->prepare('SELECT `setting_value_encrypted`, `is_encrypted` FROM `app_settings` WHERE `setting_key` = :k LIMIT 1');
-        $stmt->execute([':k' => $key]);
+        $stmt = $this->pdo->prepare('SELECT `setting_value_encrypted`, `is_encrypted` FROM `app_settings` WHERE `user_id` = :uid AND `setting_key` = :k LIMIT 1');
+        $stmt->execute([':uid' => $this->scopeFor($key), ':k' => $key]);
         $row = $stmt->fetch();
         if (!$row) {
             return $default;
@@ -43,13 +55,14 @@ final class SettingsRepository
             : $value;
 
         $stmt = $this->pdo->prepare(<<<'SQL'
-            INSERT INTO `app_settings` (`setting_key`, `setting_value_encrypted`, `is_encrypted`)
-            VALUES (:k, :v, :enc)
+            INSERT INTO `app_settings` (`user_id`, `setting_key`, `setting_value_encrypted`, `is_encrypted`)
+            VALUES (:uid, :k, :v, :enc)
             ON DUPLICATE KEY UPDATE
                 `setting_value_encrypted` = VALUES(`setting_value_encrypted`),
                 `is_encrypted` = VALUES(`is_encrypted`)
         SQL);
         $stmt->execute([
+            ':uid' => $this->scopeFor($key),
             ':k'   => mb_substr($key, 0, 100),
             ':v'   => $stored,
             ':enc' => $encrypt ? 1 : 0,

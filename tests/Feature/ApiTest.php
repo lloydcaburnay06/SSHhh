@@ -1,6 +1,5 @@
 <?php
 
-use App\Services\Authenticator;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Inertia\Testing\AssertableInertia as Assert;
@@ -8,28 +7,11 @@ use Inertia\Testing\AssertableInertia as Assert;
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
-    $this->withSession([Authenticator::SESSION_FLAG => true]);
+    $this->user = signIn();
 });
 
-function projectPayload(array $overrides = []): array
-{
-    return array_merge([
-        'name' => 'Shop',
-        'environment' => 'production',
-        'repo_branch' => 'main',
-        'remote_path' => '/var/www/shop',
-        'ssh_host' => 'shop.example.com',
-        'ssh_port' => 22,
-        'ssh_username' => 'deploy',
-        'ssh_auth_type' => 'password',
-        'ssh_password' => 's3cret-pass',
-        'preset' => 'none',
-    ], $overrides);
-}
-
 it('requires an unlocked session', function () {
-    $this->flushSession();
-    DB::table('auth_state')->where('id', 1)->update(['is_configured' => 1]);
+    $this->post('/logout');
 
     $this->getJson('/api/projects')
         ->assertUnauthorized()

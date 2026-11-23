@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\User;
 use App\Services\ProjectRepository;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -9,19 +10,23 @@ uses(RefreshDatabase::class);
 
 function webhookProject(bool $enabled = true): array
 {
-    $project = app(ProjectRepository::class)->create([
-        'name' => 'Blog',
-        'ssh_host' => 'blog.example.com',
-        'ssh_port' => 22,
-        'ssh_username' => 'deploy',
-        'ssh_auth_type' => 'password',
-        'ssh_password' => 'pw',
-        'webhook_enabled' => $enabled ? 1 : 0,
-        'webhook_branch' => 'main',
-        'preset' => 'none',
-    ]);
+    $owner = User::factory()->regular()->create();
 
-    return app(ProjectRepository::class)->find($project['id']);
+    return asWorkspace($owner, function () use ($enabled) {
+        $project = app(ProjectRepository::class)->create([
+            'name' => 'Blog',
+            'ssh_host' => 'blog.example.com',
+            'ssh_port' => 22,
+            'ssh_username' => 'deploy',
+            'ssh_auth_type' => 'password',
+            'ssh_password' => 'pw',
+            'webhook_enabled' => $enabled ? 1 : 0,
+            'webhook_branch' => 'main',
+            'preset' => 'none',
+        ]);
+
+        return app(ProjectRepository::class)->find($project['id']);
+    });
 }
 
 it('rejects webhooks without a valid token', function () {
